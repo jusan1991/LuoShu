@@ -17,8 +17,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fontTools.ttLib import TTFont
-
 import device_font_slot_build as slot_builder
 import device_font_slot_plan as slot_planner
 import device_font_template as template_engine
@@ -67,24 +65,6 @@ def nearest_source(sources: dict[int, Path], weight: int) -> tuple[int, Path]:
     return selected, sources[selected]
 
 
-def variation_axes(path: Path, face_index: int = -1) -> list[str]:
-    kwargs: dict[str, Any] = {"lazy": True, "recalcTimestamp": False}
-    try:
-        with path.open("rb") as stream:
-            magic = stream.read(4)
-        if magic == b"ttcf":
-            kwargs["fontNumber"] = max(0, face_index)
-        font = TTFont(str(path), **kwargs)
-    except Exception:
-        return []
-    try:
-        if "fvar" not in font:
-            return []
-        return sorted({str(axis.axisTag) for axis in font["fvar"].axes})
-    finally:
-        font.close()
-
-
 def source_profiles(sources: dict[int, Path]) -> dict[int, dict[str, Any]]:
     profiles: dict[int, dict[str, Any]] = {}
     by_identity: dict[tuple[int, int, int], dict[str, Any]] = {}
@@ -94,21 +74,9 @@ def source_profiles(sources: dict[int, Path]) -> dict[int, dict[str, Any]]:
         profile = by_identity.get(identity)
         if profile is None:
             profile = template_engine.inspect_font(path, -1, hash_fonts=True)
-            profile["variationAxes"] = variation_axes(path, int(profile.get("faceIndex") or -1))
             by_identity[identity] = profile
         profiles[weight] = profile
     return profiles
-
-
-def can_materialize_weight(
-    sources: dict[int, Path],
-    source_profile: dict[str, Any],
-    target_weight: int,
-) -> bool:
-    if target_weight in sources:
-        return True
-    axes = source_profile.get("variationAxes")
-    return isinstance(axes, list) and "wght" in axes
 
 
 def build_signature(slot: dict[str, Any], source_profile: dict[str, Any], source_weight: int) -> str:
@@ -146,10 +114,6 @@ def safe_slot_record(original: dict[str, Any], plan: dict[str, Any]) -> dict[str
         "roles": original.get("roles", []),
         "replaceable": bool(original.get("replaceable")),
         "stockPath": original.get("resolvedPath", ""),
-        "directPhysical": bool(original.get("directPhysical")),
-        "inventoryPath": original.get("inventoryPath", ""),
-        "inventorySource": original.get("inventorySource", ""),
-        "inventoryDisposition": original.get("inventoryDisposition", ""),
         "planStatus": plan.get("status", "unresolved"),
         "planReason": plan.get("reason", ""),
     }
@@ -206,26 +170,7 @@ def build_payload(
             target_weight = int(original.get("weight") or 400)
             source_weight, source_path = nearest_source(sources, target_weight)
             source_profile = profiles[source_weight]
-
-            # A direct physical weight slot (HyperOS 100/700.ttf, OEM clock
-            # weight files, etc.) has no XML layer where Android can reinterpret
-            # the generated face's true weight. Never put a static Regular
-            # outline into a physical Bold/Thin slot merely because it is the
-            # nearest available source. Exact static faces are accepted; a real
-            # variable source may materialize the requested wght.
-            if (
-                bool(original.get("directPhysical"))
-                and not can_materialize_weight(sources, source_profile, target_weight)
-            ):
-                plan = {
-                    "status": "skipped",
-                    "reason": "source-weight-missing",
-                    "replaceable": bool(original.get("replaceable")),
-                    "targetWeight": target_weight,
-                    "sourceWeight": source_weight,
-                }
-            else:
-                plan = slot_planner.slot_plan(original, source_profile)
+            plan = slot_planner.slot_plan(original, source_profile)
             record = safe_slot_record(original, plan)
             record.update(
                 {
@@ -233,7 +178,6 @@ def build_payload(
                     "sourceWeight": source_weight,
                     "sourcePath": str(source_path),
                     "sourceSha256": source_profile.get("sha256", ""),
-                    "sourceVariationAxes": source_profile.get("variationAxes", []),
                 }
             )
             status = plan.get("status")
@@ -274,8 +218,6 @@ def build_payload(
                     "path": str(destination),
                     "sourceWeight": source_weight,
                     "sourceSha256": source_profile.get("sha256", ""),
-                    "outlineWeight": int(report.get("outlineWeight") or target_weight),
-                    "weightMatched": bool(report.get("weightMatched", True)),
                     "bytes": destination.stat().st_size,
                     "report": report,
                     "references": 0,
@@ -287,8 +229,6 @@ def build_payload(
                     "signature": signature,
                     "generatedFile": generated["filename"],
                     "generatedBytes": generated["bytes"],
-                    "outlineWeight": int(generated.get("outlineWeight") or target_weight),
-                    "weightMatched": bool(generated.get("weightMatched", True)),
                     "plan": plan,
                 }
             )
@@ -326,7 +266,6 @@ def build_payload(
             },
             "generated": generated_files,
             "slots": manifest_slots,
-            "inventorySupplement": template.get("inventorySupplement", {}),
             "failures": failures,
         }
         atomic_json(payload, stage / "manifest.json")

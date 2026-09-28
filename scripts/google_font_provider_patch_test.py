@@ -118,11 +118,13 @@ class ProviderPatchTest(unittest.TestCase):
                                  "--inspect-targets", str(candidates)], text=True, capture_output=True, check=True)
         self.assertEqual(result.stdout, f"{valid}\t600\n")
 
-    def test_service_keeps_discovering_after_first_success(self):
+    def test_service_applies_once_and_exits_with_owned_descendants_reaped(self):
         module = self.root / "module"
         (module / "common").mkdir(parents=True)
         (module / "config").mkdir()
         (module / "config/active_font.conf").write_text("fixture\n")
+        from host_task_scope_fixture import install_task_scope
+        install_task_scope(module)
         marker = self.root / "passes"
         (module / "common/google_font_provider_bridge.sh").write_text(
             'case "$1" in fingerprint) echo unchanged;; '
@@ -137,7 +139,7 @@ class ProviderPatchTest(unittest.TestCase):
         env = dict(os.environ, MODDIR=str(module), LUOSHU_GOOGLE_FONT_RETRIES="3",
                    LUOSHU_GOOGLE_FONT_WATCH_CYCLES="0",
                    PROVIDER_TEST_MARKER=str(marker), PATH=f"{commands}:{os.environ['PATH']}")
-        subprocess.run(["sh", str(ROOT / "common/google_font_provider_service.sh")], env=env, check=True)
+        subprocess.run(["sh", str(ROOT / "common/google_font_provider_service.sh")], env=env, check=True, timeout=10)
         self.assertEqual(marker.read_text().splitlines(), ["pass"])
 
     def test_equal_clone_skips_remount_in_target_namespace(self):

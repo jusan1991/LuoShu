@@ -7,9 +7,7 @@ TMP=$(mktemp -d 2>/dev/null || mktemp -d -t luoshu-mix-finalize)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
 MODULE="$TMP/module"
-mkdir -p "$MODULE/.luoshu-mix-stage/system/fonts" "$MODULE/config" "$MODULE/common" "$MODULE/logs"
-cp "$ROOT/common/background_task.sh" "$MODULE/common/background_task.sh"
-chmod 0755 "$MODULE/common/background_task.sh"
+mkdir -p "$MODULE/.luoshu-mix-stage/system/fonts" "$MODULE/config"
 printf 'module\n' > "$MODULE/module.prop"
 printf 'new-composite\n' > "$MODULE/.luoshu-mix-stage/system/fonts/MiSansVF.ttf"
 printf 'default\n' > "$MODULE/config/active_font.conf"
@@ -149,78 +147,8 @@ MODDIR="$MODULE" sh "$ROUTER" status axes-fast > "$TMP/status-failed.out"
 grep -q '"state":"failed"' "$TMP/status-failed.out"
 grep -q '提交校验失败' "$TMP/status-failed.out"
 
-# A successful generator without a durable next payload must never remain at 99%
-# forever. Status polling starts an identity-bound detached finalize recovery worker.
-rm -f "$MODULE/config/mix-finalize-state.conf"
-rm -rf "$MODULE/.luoshu-payload-next"
-rm -f "$MODULE/config/font-payload-next.conf"
-mkdir -p "$MODULE/.luoshu-mix-stage/system/fonts"
-printf 'recovery-composite\n' > "$MODULE/.luoshu-mix-stage/system/fonts/MiSansVF.ttf"
-cat > "$MODULE/config/mix-stage-next.conf" <<'EOF_STATE_RECOVERY'
-requestId=request-recovery
-cjk=CjkRecovery
-latin=LatinRecovery
-digit=DigitRecovery
-previousFont=mix
-previousLegacy=true
-time=4
-EOF_STATE_RECOVERY
-cat > "$MODULE/.luoshu-mix-stage/.luoshu-mix-generation.conf" <<'EOF_MANIFEST_RECOVERY'
-requestId=request-recovery
-cjk=CjkRecovery
-latin=LatinRecovery
-digit=DigitRecovery
-compositeHash=composite-recovery
-EOF_MANIFEST_RECOVERY
-cat > "$MODULE/config/axes_task.conf" <<'EOF_AXES_RECOVERY'
-task=axes-recovery
-state=success
-message=字体已生成
-cjk=CjkRecovery
-latin=LatinRecovery
-digit=DigitRecovery
-percent=100
-started=1
-finished=2
-EOF_AXES_RECOVERY
-MODDIR="$MODULE" sh "$ROUTER" status axes-recovery > "$TMP/status-recovery-start.out"
-grep -q '"state":"running"' "$TMP/status-recovery-start.out"
-grep -q '"percent":99' "$TMP/status-recovery-start.out"
-
-COUNT=0
-while [ "$COUNT" -lt 10 ]; do
-    [ -s "$MODULE/config/font-payload-next.conf" ] && [ -d "$MODULE/.luoshu-payload-next" ] && break
-    sleep 1
-    COUNT=$((COUNT + 1))
-done
-test -s "$MODULE/config/font-payload-next.conf"
-test -d "$MODULE/.luoshu-payload-next"
-MODDIR="$MODULE" sh "$ROUTER" status axes-recovery > "$TMP/status-recovery-done.out"
-grep -q '"state":"success"' "$TMP/status-recovery-done.out"
-grep -q '"percent":100' "$TMP/status-recovery-done.out"
-
-grep -q 'finalize_compat_payload' "$ROOT/common/legacy_v14_4/v142_weighted_mix.sh"
-grep -q "write_auto_generation_manifest" "$ROOT/common/legacy_v14_4/v143_auto_multiweight_mix.sh"
-grep -q 'finalize_compat_payload' "$ROOT/common/legacy_v14_4/v143_auto_multiweight_mix.sh"
-grep -q 'ensure_mix_finalize_worker' "$ROUTER"
-grep -q 'prepare_mix_stage_for_commit' "$ROUTER"
-grep -q 'PRECOMMIT_STATE=' "$ROUTER"
-grep -q 'prepare-finalize' "$ROUTER"
-grep -q " 90 " "$ROOT/common/legacy_v14_4/v142_weighted_mix.sh"
-grep -q " 99 " "$ROOT/common/legacy_v14_4/v142_weighted_mix.sh"
-grep -q 'prepare_compat_payload' "$ROOT/common/legacy_v14_4/v142_weighted_mix.sh"
-grep -q 'prepare_compat_payload' "$ROOT/common/legacy_v14_4/v143_auto_multiweight_mix.sh"
-sh -n "$ROOT/common/legacy_v14_4/v142_weighted_mix.sh"
-sh -n "$ROOT/common/legacy_v14_4/v143_auto_multiweight_mix.sh"
-sh -n "$ROUTER"
-
 # A second mix generation must not inherit any prior text aliases from the live
 # payload. Preserve unrelated XML, but clear every font partition and LuoShu XML.
-# The real router sources payload_clone.sh before this function; mirror that
-# dependency so scanner-discovered partition enumeration is available here too.
-REALMOD="$MODULE"
-export REALMOD
-. "$ROOT/common/legacy_v14_4/payload_clone.sh"
 FUNCTION=$(sed -n '/^clear_mix_text_payload()/,/^}/p' "$ROUTER")
 eval "$FUNCTION"
 MIX="$TMP/mix-clean"
@@ -242,32 +170,4 @@ test -z "$(find "$MIX" -path '*/fonts/*' -type f -print -quit)"
 grep -q 'clear_mix_text_payload "$MIX_STAGE"' "$ROUTER"
 grep -q 'font_runtime_legacy_v14_4.conf' "$ROOT/boot-completed.sh"
 
-# The safe switch may already have produced the exact next-boot payload for this
-# mix request. prepare-finalize must recognize it and skip rebuilding/normalizing
-# the compatibility stage a second time.
-rm -rf "$MODULE/.luoshu-mix-stage"
-mkdir -p "$MODULE/.luoshu-payload-next/system/fonts"
-printf 'already-prepared\n' > "$MODULE/.luoshu-payload-next/system/fonts/Ready.ttf"
-cat > "$MODULE/config/mix-stage-next.conf" <<'EOF_REUSE_STAGE'
-requestId=request-reuse
-cjk=CjkReuse
-latin=LatinReuse
-digit=DigitReuse
-previousFont=mix
-previousLegacy=true
-time=5
-EOF_REUSE_STAGE
-cat > "$MODULE/config/font-payload-next.conf" <<'EOF_REUSE_NEXT'
-state=prepared
-font=mix
-requestId=request-reuse
-previousFont=mix
-previousLegacy=true
-time=5
-EOF_REUSE_NEXT
-MODDIR="$MODULE" sh "$ROUTER" prepare-finalize > "$TMP/prepare-reuse.out" 2>&1
-grep -q '"status":"ok"' "$TMP/prepare-reuse.out"
-grep -q 'next_mix_payload_ready_for_request' "$ROUTER"
-grep -q 'LUOSHU_MIX_REQUEST_ID' "$ROOT/common/legacy_v14_4/font_switch_safe.sh"
-
-echo 'Composite finalization is idempotent, generation-bound, and repeated mixes reuse the already-mapped next payload instead of rebuilding it.'
+echo 'Composite finalization is idempotent, generation-bound, and repeated mixes drop every old text slot.'

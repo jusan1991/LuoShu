@@ -12,8 +12,7 @@ if [ -z "$MODDIR" ]; then
 fi
 CONFIG_DIR="$MODDIR/config"
 CACHE_ROOT="$MODDIR/cache/auto-multiweight-mix"
-COMPOSITE_CACHE="$CACHE_ROOT/composites-v4"
-MIX_ENGINE_IDENTITY=''
+COMPOSITE_CACHE="$CACHE_ROOT/composites-v3"
 PUBLIC_ROOT="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}"
 SOURCE_FONTS="$PUBLIC_ROOT/fonts"
 USER_FONTS_DIR="$SOURCE_FONTS"
@@ -33,15 +32,11 @@ REBOOT_CONF="$CONFIG_DIR/text_reboot_required.conf"
 WORKER_PID="$CONFIG_DIR/auto_multiweight_worker.pid"
 LOG_FILE="$MODDIR/logs/fontswitch.log"
 LOCK_FILE="$MODDIR/.font_switch.lock"
-REALMOD="${LUOSHU_REAL_MODDIR:-}"
-REAL_MIX_ROUTER="${REALMOD:+$REALMOD/common/legacy_v14_4/mix_router.sh}"
-FINALIZE_ERROR=''
 
 [ -f "$MODDIR/common/util_functions.sh" ] && . "$MODDIR/common/util_functions.sh"
 [ -f "$MODDIR/common/font_check.sh" ] && . "$MODDIR/common/font_check.sh"
 [ -f "$MODE_HELPER" ] && . "$MODE_HELPER"
 [ -f "$MODDIR/common/background_task.sh" ] && . "$MODDIR/common/background_task.sh"
-[ -f "$MODDIR/common/font_provenance.sh" ] && . "$MODDIR/common/font_provenance.sh"
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r' '  '; }
 read_value() { sed -n "s/^${2}=//p" "$1" 2>/dev/null | head -n1 | tr -d '\r\n'; }
@@ -55,93 +50,6 @@ clear_auto_worker_pid() {
     else
         rm -f "$WORKER_PID" 2>/dev/null || true
     fi
-}
-
-write_auto_generation_manifest() {
-    _agm_manifest="${LUOSHU_MIX_MANIFEST:-}"
-    _agm_request="${LUOSHU_MIX_REQUEST_ID:-}"
-    [ -n "$_agm_manifest" ] && [ -n "$_agm_request" ] || return 0
-    mkdir -p "${_agm_manifest%/*}" 2>/dev/null || return 1
-    _agm_hash_input=''
-    for _agm_file in "$1"/fonts/*; do
-        [ -s "$_agm_file" ] || continue
-        _agm_digest=$(hash_file "$_agm_file")
-        [ -n "$_agm_digest" ] || continue
-        _agm_hash_input="${_agm_hash_input}${_agm_file##*/}=${_agm_digest};"
-    done
-    [ -n "$_agm_hash_input" ] || return 1
-    _agm_composite_hash=$(printf '%s' "$_agm_hash_input" | hash_text)
-    [ -n "$_agm_composite_hash" ] || return 1
-    _agm_tmp="${_agm_manifest}.tmp.$"
-    {
-        printf 'requestId=%s\n' "$_agm_request"
-        printf 'cjk=%s\nlatin=%s\ndigit=%s\n'             "${LUOSHU_MIX_EXPECTED_CJK:-$2}" "${LUOSHU_MIX_EXPECTED_LATIN:-$3}" "${LUOSHU_MIX_EXPECTED_DIGIT:-$4}"
-        printf 'engineCjk=%s\nengineLatin=%s\nengineDigit=%s\n' "$2" "$3" "$4"
-        printf 'compositeHash=%s\n' "$_agm_composite_hash"
-        printf 'mode=auto-multiweight\n'
-        printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } >"$_agm_tmp" 2>/dev/null || return 1
-    mv -f "$_agm_tmp" "$_agm_manifest" 2>/dev/null || return 1
-    chmod 0644 "$_agm_manifest" 2>/dev/null || true
-    return 0
-}
-
-prepare_compat_payload() {
-    FINALIZE_ERROR=''
-    [ -n "$REALMOD" ] && [ "$REALMOD" != "$MODDIR" ] && [ -f "$REAL_MIX_ROUTER" ] || return 0
-    _pcp_out="$CONFIG_DIR/.compat-prepare.$"
-    rm -f "$_pcp_out" 2>/dev/null || true
-    if command -v timeout >/dev/null 2>&1; then
-        MODDIR="$REALMOD" LUOSHU_REAL_MODDIR="$REALMOD" timeout 120 sh "$REAL_MIX_ROUTER" prepare-finalize >"$_pcp_out" 2>&1
-        _pcp_rc=$?
-    elif command -v toybox >/dev/null 2>&1 && toybox timeout --help >/dev/null 2>&1; then
-        MODDIR="$REALMOD" LUOSHU_REAL_MODDIR="$REALMOD" toybox timeout 120 sh "$REAL_MIX_ROUTER" prepare-finalize >"$_pcp_out" 2>&1
-        _pcp_rc=$?
-    else
-        MODDIR="$REALMOD" LUOSHU_REAL_MODDIR="$REALMOD" sh "$REAL_MIX_ROUTER" prepare-finalize >"$_pcp_out" 2>&1
-        _pcp_rc=$?
-    fi
-    cat "$_pcp_out" >>"$LOG_FILE" 2>/dev/null || true
-    if [ "$_pcp_rc" -ne 0 ] || ! grep -q '"status":"ok"' "$_pcp_out" 2>/dev/null; then
-        FINALIZE_ERROR=$(sed -n 's/^.*"message":"\([^"]*\)".*$/\1/p' "$_pcp_out" 2>/dev/null | tail -n1)
-        [ -n "$FINALIZE_ERROR" ] || {
-            case "$_pcp_rc" in
-                124) FINALIZE_ERROR='复合字体预提交超过 120 秒，已自动终止，不再继续空等' ;;
-                *) FINALIZE_ERROR='复合字体预提交处理失败' ;;
-            esac
-        }
-        rm -f "$_pcp_out" 2>/dev/null || true
-        return 1
-    fi
-    rm -f "$_pcp_out" 2>/dev/null || true
-    return 0
-}
-finalize_compat_payload() {
-    FINALIZE_ERROR=''
-    [ -n "$REALMOD" ] && [ "$REALMOD" != "$MODDIR" ] && [ -f "$REAL_MIX_ROUTER" ] || return 0
-    _fcp_out="$CONFIG_DIR/.compat-finalize.$"
-    rm -f "$_fcp_out" 2>/dev/null || true
-    if command -v timeout >/dev/null 2>&1; then
-        MODDIR="$REALMOD" LUOSHU_REAL_MODDIR="$REALMOD" timeout 60 sh "$REAL_MIX_ROUTER" finalize >"$_fcp_out" 2>&1
-        _fcp_rc=$?
-    elif command -v toybox >/dev/null 2>&1 && toybox timeout --help >/dev/null 2>&1; then
-        MODDIR="$REALMOD" LUOSHU_REAL_MODDIR="$REALMOD" toybox timeout 60 sh "$REAL_MIX_ROUTER" finalize >"$_fcp_out" 2>&1
-        _fcp_rc=$?
-    else
-        MODDIR="$REALMOD" LUOSHU_REAL_MODDIR="$REALMOD" sh "$REAL_MIX_ROUTER" finalize >"$_fcp_out" 2>&1
-        _fcp_rc=$?
-    fi
-    cat "$_fcp_out" >>"$LOG_FILE" 2>/dev/null || true
-    if [ "$_fcp_rc" -ne 0 ] || ! grep -q '"status":"ok"' "$_fcp_out" 2>/dev/null; then
-        FINALIZE_ERROR=$(sed -n 's/^.*"message":"\([^"]*\)".*$/\1/p' "$_fcp_out" 2>/dev/null | tail -n1)
-        [ -n "$FINALIZE_ERROR" ] || {
-            case "$_fcp_rc" in 124) FINALIZE_ERROR='提交下一启动字体负载超过 60 秒，已自动终止' ;; *) FINALIZE_ERROR='下一启动字体负载提交失败' ;; esac
-        }
-        rm -f "$_fcp_out" 2>/dev/null || true
-        return 1
-    fi
-    rm -f "$_fcp_out" 2>/dev/null || true
-    return 0
 }
 
 resolve_mode() {
@@ -357,8 +265,8 @@ build_composite_cached() {
     _output="$4"
     _progress="$5"
     mkdir -p "$COMPOSITE_CACHE" "${_output%/*}" 2>/dev/null || return 1
-    _key=$(printf '%s|%s|%s|auto-multiweight-v4-provenance|%s' \
-        "$(hash_file "$_cjk")" "$(hash_file "$_latin")" "$(hash_file "$_digit")" "$MIX_ENGINE_IDENTITY" | hash_text)
+    _key=$(printf '%s|%s|%s|auto-multiweight-v3-metrics' \
+        "$(hash_file "$_cjk")" "$(hash_file "$_latin")" "$(hash_file "$_digit")" | hash_text)
     [ -n "$_key" ] || return 1
     _cached="$COMPOSITE_CACHE/${_key}.font"
     if [ -s "$_cached" ]; then
@@ -393,20 +301,12 @@ build_composite_cached() {
 
 save_mix_config() {
     _tmp="$MIX_CONF.auto.$$"
-    _mix_proof=''
-    if type luoshu_provenance_mix_proof >/dev/null 2>&1; then
-        _mix_proof=$(luoshu_provenance_mix_proof             "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$SOURCE_FONTS" 2>/dev/null) || _mix_proof=''
-    fi
     {
         printf 'cjk=%s\nlatin=%s\ndigit=%s\n' "$1" "$2" "$3"
         printf 'cjkWeight=%s\nlatinWeight=%s\ndigitWeight=%s\n' "$(safe_weight "$4")" "$(safe_weight "$5")" "$(safe_weight "$6")"
         printf 'cjkAxes=%s\nlatinAxes=%s\ndigitAxes=%s\n' "$4" "$5" "$6"
         printf 'cjkMode=%s\nlatinMode=%s\ndigitMode=%s\n' "$7" "$8" "$9"
-        printf 'isolation=auto-multiweight-v2\ncharacterIsolation=true\ncomposite=true\nxmlOverlay=false\ntime=%s\n' "$(date +%s)"
-        if [ -n "$_mix_proof" ]; then
-            printf 'provenanceSchema=font-provenance-v1\n'
-            printf 'mixProof=%s\n' "$_mix_proof"
-        fi
+        printf 'isolation=auto-multiweight-v1\ncharacterIsolation=true\ncomposite=true\nxmlOverlay=false\ntime=%s\n' "$(date +%s)"
     } >"$_tmp" 2>/dev/null && mv -f "$_tmp" "$MIX_CONF" 2>/dev/null || return 1
     cp -f "$MIX_CONF" "$AXES_CONF" 2>/dev/null || true
     printf 'mix\n' >"$ACTIVE_CONF" 2>/dev/null || return 1
@@ -414,6 +314,7 @@ save_mix_config() {
     sed -i '/^LuoShuAutoMix$/d' "$CONFIG_DIR/recent_fonts.conf" 2>/dev/null || true
     chmod 0644 "$MIX_CONF" "$AXES_CONF" "$ACTIVE_CONF" "$REBOOT_CONF" 2>/dev/null || true
 }
+
 worker() {
     trap '' HUP
     _wanted="$1"
@@ -429,15 +330,6 @@ worker() {
     _digit_mode=$(normalize_mode "$(read_value "$TASK_FILE" digitMode)")
     _root=$(read_value "$TASK_FILE" root)
     _family=LuoShuAutoMix
-    type luoshu_provenance_engine_identity >/dev/null 2>&1 || {
-        update_task "$_wanted" failed '字体生成版本核验组件缺失' 100 "$(date +%s)"
-        clear_auto_worker_pid "$_wanted"; exit 1
-    }
-    MIX_ENGINE_IDENTITY=$(luoshu_provenance_engine_identity 2>/dev/null)
-    [ -n "$MIX_ENGINE_IDENTITY" ] || {
-        update_task "$_wanted" failed '无法核验字体生成版本' 100 "$(date +%s)"
-        clear_auto_worker_pid "$_wanted"; exit 1
-    }
     mkdir -p "$_root/fonts" "$_root/prepared" 2>/dev/null || {
         update_task "$_wanted" failed '无法创建自动多字重缓存' 100 "$(date +%s)"
         exit 1
@@ -487,21 +379,7 @@ worker() {
         update_task "$_wanted" failed '组合配置保存失败' 100 "$(date +%s)"
         rm -rf "$_root"; clear_auto_worker_pid "$_wanted"; exit 1
     }
-    write_auto_generation_manifest "$_root" "$_cjk" "$_latin" "$_digit" || {
-        update_task "$_wanted" failed '无法生成自动多字重提交清单' 100 "$(date +%s)"
-        rm -rf "$_root"; clear_auto_worker_pid "$_wanted"; exit 1
-    }
-    update_task "$_wanted" running '自动多字重已生成，正在核验本机扫描槽位并提交' 90 ''
-    if ! prepare_compat_payload; then
-        update_task "$_wanted" failed "${FINALIZE_ERROR:-复合字体预提交处理失败}" 100 "$(date +%s)"
-        rm -rf "$_root"; clear_auto_worker_pid "$_wanted"; exit 1
-    fi
-    update_task "$_wanted" running '预提交完成，正在原子提交下一启动负载' 99 ''
-    if ! finalize_compat_payload; then
-        update_task "$_wanted" failed "${FINALIZE_ERROR:-下一启动字体负载提交失败}" 100 "$(date +%s)"
-        rm -rf "$_root"; clear_auto_worker_pid "$_wanted"; exit 1
-    fi
-    update_task "$_wanted" success '自动多字重负载已提交，完整重启后生效' 100 "$(date +%s)"
+    update_task "$_wanted" success '自动多字重复合字体已准备，完整重启后生效' 100 "$(date +%s)"
     rm -rf "$_root" 2>/dev/null || true
     clear_auto_worker_pid "$_wanted"
 }
@@ -560,7 +438,6 @@ start_mix() {
         printf '{"status":"error","message":"无法创建任务目录"}\n'
         return
     }
-    rm -rf "$CACHE_ROOT/composites-v3" 2>/dev/null || true
     _task="auto-mix-$(date +%s)-$$"
     _root="$CACHE_ROOT/$_task"
     mkdir -p "$_root" 2>/dev/null || {

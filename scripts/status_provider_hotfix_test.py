@@ -48,7 +48,7 @@ class HotfixTest(unittest.TestCase):
         self.assertFalse((self.module / '.legacy-v14-runtime').exists())
         self.assertFalse((self.module / '.luoshu-payload').exists())
 
-    def test_weight_read_does_not_migrate_fonts_and_queries_settings_once(self):
+    def test_retired_weight_read_never_migrates_fonts_or_queries_settings(self):
         for name in ('font_manager_v4.sh', 'util_functions.sh', 'util_functions_core.sh'):
             self.copy(name)
         legacy = self.root / 'legacy'
@@ -57,47 +57,10 @@ class HotfixTest(unittest.TestCase):
         self.env['LEGACY_FONTS_DIR'] = str(legacy)
         self.command('settings', 'echo call >> "$TEST_ROOT/settings-calls"\necho 50\n')
         result = json.loads(self.run_shell(self.common / 'font_manager_v4.sh', 'action', 'font_weight_status'))
-        self.assertEqual(result['data']['weight'], 450)
-        self.assertEqual((self.root / 'settings-calls').read_text().splitlines(), ['call'])
+        self.assertFalse(result['data']['supported'])
+        self.assertTrue(result['data']['retired'])
+        self.assertFalse((self.root / 'settings-calls').exists())
         self.assertFalse((self.root / 'public').exists(), 'status migrated public fonts')
-
-    def test_weight_write_targets_current_user_and_verifies_readback(self):
-        for name in ('font_manager_v4.sh', 'util_functions.sh', 'util_functions_core.sh'):
-            self.copy(name)
-        self.command('settings', r'''
-echo "$*" >> "$TEST_ROOT/settings-args"
-if [ "$1" = "--user" ] && [ "$2" = "current" ]; then
-    shift 2
-else
-    exit 9
-fi
-case "$1:$2" in
-    get:secure)
-        cat "$TEST_ROOT/weight-state" 2>/dev/null || echo 0
-        ;;
-    put:secure)
-        printf '%s\n' "$4" > "$TEST_ROOT/weight-state"
-        ;;
-    *) exit 8 ;;
-esac
-''')
-        self.command('am', 'exit 0\n')
-        applied = json.loads(self.run_shell(
-            self.common / 'font_manager_v4.sh', 'action', 'font_weight_set', '520'
-        ))
-        self.assertEqual(applied['status'], 'ok')
-        self.assertEqual((self.root / 'weight-state').read_text().strip(), '120')
-        calls = (self.root / 'settings-args').read_text().splitlines()
-        self.assertTrue(calls)
-        self.assertTrue(all(line.startswith('--user current ') for line in calls), calls)
-
-        reset = json.loads(self.run_shell(
-            self.common / 'font_manager_v4.sh', 'action', 'font_weight_reset'
-        ))
-        self.assertEqual(reset['status'], 'ok')
-        self.assertEqual((self.root / 'weight-state').read_text().strip(), '0')
-        calls = (self.root / 'settings-args').read_text().splitlines()
-        self.assertTrue(all(line.startswith('--user current ') for line in calls), calls)
 
     def test_status_does_not_start_deep_verifier_or_root_manager_daemon(self):
         self.copy('font_boot_state.sh')

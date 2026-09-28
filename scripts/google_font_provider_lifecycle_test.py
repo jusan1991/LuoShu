@@ -1,283 +1,136 @@
 #!/usr/bin/env python3
-"""Exercise late downloads/process changes after the boot discovery window."""
+"""One-shot lifecycle regression: no late-download observer or consumer restarts."""
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
 import unittest
-
+from host_task_scope_fixture import install_task_scope
 ROOT = Path(__file__).resolve().parents[1]
-
 
 class ProviderLifecycleTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.module = self.root / "module"
-        (self.module / "common").mkdir(parents=True)
-        (self.module / "config").mkdir()
-        self.active = self.module / "config/active_font.conf"
-        self.active.write_text("custom\n")
-        self.bin = self.root / "bin"
-        self.bin.mkdir()
-        self.marker = self.root / "applied"
-        self.snapshot = self.root / "snapshot"
-        self.snapshot.write_text("boot-cache-and-namespace\n")
-        self.commands("getprop", "echo 1\n")
-        shutil.copyfile(ROOT / "common/font_switch_lock.sh",
-                        self.module / "common/font_switch_lock.sh")
-        (self.module / "common/google_font_provider_bridge.sh").write_text('''
-case "$1" in
-    fingerprint) cat "$TEST_SNAPSHOT" ;;
-    apply)
-        printf '%s|%s\\n' "$(cat "$TEST_SNAPSHOT")" "${LUOSHU_GOOGLE_FONT_ALLOW_RESTART:-1}" >> "$TEST_APPLIED"
-        if [ -s "$TEST_ROOT/during-apply" ]; then
-            cat "$TEST_ROOT/during-apply" > "$TEST_SNAPSHOT"
-            rm "$TEST_ROOT/during-apply"
-        fi
-        exit "${TEST_APPLY_RC:-0}"
-        ;;
+        self.module = self.root / 'module'
+        (self.module/'config').mkdir(parents=True)
+        self.active = self.module/'config/active_font.conf'
+        self.active.write_text('custom\n')
+        install_task_scope(self.module)
+        shutil.copyfile(ROOT/'common/font_switch_lock.sh',self.module/'common/font_switch_lock.sh')
+        self.bin=self.root/'bin';self.bin.mkdir()
+        self.commands('getprop','echo 1\n')
+        self.commands('sleep',':\n')
+        self.marker=self.root/'applied'
+        self.snapshot=self.root/'snapshot';self.snapshot.write_text('boot-cache-and-namespace\n')
+        (self.module/'common/google_font_provider_bridge.sh').write_text('''case "$1" in
+fingerprint) cat "$TEST_SNAPSHOT";;
+apply) printf '%s|%s\n' "$(cat "$TEST_SNAPSHOT")" "$LUOSHU_GOOGLE_FONT_ALLOW_RESTART" >> "$TEST_APPLIED"; exit "${TEST_APPLY_RC:-0}";;
+restore) echo restore >> "$TEST_ROOT/restored"; exit "${TEST_RESTORE_RC:-0}";;
 esac
 ''')
-        self.env = {**os.environ, "MODDIR": str(self.module),
-                    "PATH": f"{self.bin}:{os.environ['PATH']}",
-                    "TEST_ROOT": str(self.root), "TEST_SNAPSHOT": str(self.snapshot),
-                    "TEST_APPLIED": str(self.marker), "LUOSHU_GOOGLE_FONT_RETRIES": "1",
-                    "LUOSHU_GOOGLE_FONT_WATCH_INTERVAL": "30"}
+        self.env={**os.environ,'MODDIR':str(self.module),'PATH':f'{self.bin}:{os.environ["PATH"]}',
+                  'TEST_ROOT':str(self.root),'TEST_SNAPSHOT':str(self.snapshot),'TEST_APPLIED':str(self.marker)}
 
-    def commands(self, name, text):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\n" + text)
-        path.chmod(0o755)
+    def commands(self,name,text):
+        p=self.bin/name;p.write_text('#!/bin/sh\n'+text);p.chmod(0o755)
 
-    def service(self, cycles, sleep_actions=":", **env):
-        self.commands("sleep", '''
-count=$(cat "$TEST_ROOT/ticks" 2>/dev/null || echo 0)
-count=$((count + 1))
-printf '%s\\n' "$count" > "$TEST_ROOT/ticks"
-''' + sleep_actions + "\n")
-        subprocess.run(["sh", str(ROOT / "common/google_font_provider_service.sh")],
-                       env={**self.env, "LUOSHU_GOOGLE_FONT_WATCH_CYCLES": str(cycles), **env},
-                       capture_output=True, text=True, check=True, timeout=10)
-        self.assertFalse((self.module / ".google-font-provider.lock").exists())
+    def service(self, **env):
+        result=subprocess.run(['sh',str(ROOT/'common/google_font_provider_service.sh')],
+            env={**self.env,**env},text=True,capture_output=True,timeout=10)
+        self.assertFalse((self.module/'.google-font-provider.lock').exists())
+        self.assertIn('"leftoverPids": []',result.stderr)
+        return result
+
+    def applied(self):
         return self.marker.read_text().splitlines() if self.marker.exists() else []
 
-    def test_late_download_and_restarted_provider_repaired_after_boot_window(self):
-        applied = self.service(4, '''
-case "$count" in
-    1) printf 'late-downloaded-bold\\n' > "$TEST_SNAPSHOT" ;;
-    3) printf 'new-gms-namespace\\n' > "$TEST_SNAPSHOT" ;;
-esac
-''')
-        self.assertEqual(applied, ["boot-cache-and-namespace|1",
-                                   "late-downloaded-bold|0", "new-gms-namespace|0"])
+    def test_one_apply_no_consumer_restart(self):
+        self.assertEqual(self.service().returncode,0)
+        self.assertEqual(self.applied(),['boot-cache-and-namespace|0'])
 
-    def test_idle_watch_does_not_reapply_fonts(self):
-        self.assertEqual(self.service(20), ["boot-cache-and-namespace|1"])
+    def test_old_infinite_watch_configuration_is_ignored(self):
+        self.assertEqual(self.service(LUOSHU_GOOGLE_FONT_WATCH_CYCLES='-1',LUOSHU_GOOGLE_FONT_RETRIES='24').returncode,0)
+        self.assertEqual(len(self.applied()),1)
+
+    def test_new_download_requires_another_explicit_invocation(self):
+        self.service();self.snapshot.write_text('new-download\n')
+        self.assertEqual(self.applied(),['boot-cache-and-namespace|0'])
+        self.service()
+        self.assertEqual(self.applied(),['boot-cache-and-namespace|0','new-download|0'])
+
+    def test_failure_does_not_become_silent_success_or_retry_loop(self):
+        self.assertEqual(self.service(TEST_APPLY_RC='1').returncode,1)
+        self.assertEqual(len(self.applied()),1)
+
+    def test_interrupted_apply_has_no_automatic_retry(self):
+        self.assertEqual(self.service(TEST_APPLY_RC='137').returncode,1)
+        self.assertEqual(len(self.applied()),1)
+
+    def test_no_download_is_a_clean_noop(self):
+        self.assertEqual(self.service(TEST_APPLY_RC='2').returncode,0)
+        self.assertEqual(len(self.applied()),1)
 
     def theme_fixture(self):
-        (self.root / 'theme-snapshot').write_text('theme-one\n')
-        (self.module / 'common/hyperos_theme_font_bridge.sh').write_text('''
-case "$1" in
-    fingerprint) cat "$TEST_ROOT/theme-snapshot" ;;
-    apply)
-        cat "$TEST_ROOT/theme-snapshot" >> "$TEST_ROOT/theme-applied"
-        exit "${TEST_THEME_RC:-0}"
-        ;;
-    restore)
-        echo restored >> "$TEST_ROOT/theme-restored"
-        count=$(wc -l < "$TEST_ROOT/theme-restored")
-        [ "$count" -gt "${TEST_THEME_RESTORE_FAILURES:-0}" ] || exit 1
-        ;;
+        (self.module/'common/hyperos_theme_font_bridge.sh').write_text('''case "$1" in
+apply) echo apply >> "$TEST_ROOT/theme-applied"; exit "${TEST_THEME_RC:-0}";;
+restore) echo restore >> "$TEST_ROOT/theme-restored"; exit "${TEST_RESTORE_RC:-0}";;
 esac
 ''')
 
-    def test_theme_route_change_is_watched_when_google_has_no_fonts(self):
-        self.theme_fixture()
-        self.service(3, '''
-if [ "$count" = 2 ]; then echo theme-two > "$TEST_ROOT/theme-snapshot"; fi
-''', TEST_APPLY_RC='2')
-        self.assertEqual((self.root / 'theme-applied').read_text().splitlines(),
-                         ['theme-one', 'theme-two'])
+    def test_theme_once_even_when_google_has_no_fonts(self):
+        self.theme_fixture();self.assertEqual(self.service(TEST_APPLY_RC='2').returncode,0)
+        self.assertEqual((self.root/'theme-applied').read_text().splitlines(),['apply'])
 
-    def test_idle_theme_does_not_start_repeated_builds(self):
-        self.theme_fixture()
-        self.service(20)
-        self.assertEqual((self.root / 'theme-applied').read_text().splitlines(), ['theme-one'])
+    def test_theme_failure_reported_not_rebuilt_forever(self):
+        self.theme_fixture();self.assertEqual(self.service(TEST_THEME_RC='1').returncode,1)
+        self.assertEqual((self.root/'theme-applied').read_text().splitlines(),['apply'])
 
-    def test_theme_failure_gets_backoff_even_when_google_succeeds(self):
-        self.theme_fixture()
-        self.service(11, TEST_THEME_RC='1')
-        self.assertEqual((self.root / 'theme-applied').read_text().splitlines(),
-                         ['theme-one', 'theme-one'])
+    def test_default_restores_both_without_apply(self):
+        self.theme_fixture();self.active.write_text('default\n')
+        self.assertEqual(self.service().returncode,0)
+        self.assertEqual(self.applied(),[])
+        self.assertEqual((self.root/'restored').read_text(),'restore\n')
+        self.assertEqual((self.root/'theme-restored').read_text(),'restore\n')
 
-    def test_restoring_default_releases_owned_theme_mounts(self):
-        self.theme_fixture()
-        self.service(4, '''
-if [ "$count" = 1 ]; then echo default > "$MODDIR/config/active_font.conf"; fi
-''')
-        self.assertEqual((self.root / 'theme-restored').read_text(), 'restored\n')
-        self.assertEqual((self.root / 'theme-applied').read_text().splitlines(), ['theme-one'])
+    def test_disable_and_remove_restore_before_any_apply(self):
+        for marker in ('disable','remove'):
+            with self.subTest(marker=marker):
+                (self.module/marker).touch()
+                self.assertEqual(self.service().returncode,0)
+                self.assertEqual(self.applied(),[])
+                (self.module/marker).unlink()
 
-    def test_theme_restore_retries_transient_failure_then_exits(self):
-        self.theme_fixture()
-        self.service(4, '''
-if [ "$count" = 1 ]; then echo default > "$MODDIR/config/active_font.conf"; fi
-''', TEST_THEME_RESTORE_FAILURES='2')
-        self.assertEqual((self.root / 'theme-restored').read_text().splitlines(),
-                         ['restored'] * 3)
-        self.assertEqual((self.root / 'theme-applied').read_text().splitlines(), ['theme-one'])
-
-    def test_default_disable_and_remove_report_bounded_restore_failure(self):
-        self.theme_fixture()
-        journal = self.module / 'config/hyperos-theme-font-namespaces.conf'
-        for stop in ('default', 'disable', 'remove'):
-            with self.subTest(stop=stop):
-                self.active.write_text('custom\n')
-                for name in ('disable', 'remove'):
-                    (self.module / name).unlink(missing_ok=True)
-                for name in ('ticks', 'theme-restored', 'theme-applied'):
-                    (self.root / name).unlink(missing_ok=True)
-                journal.write_text('mnt:[123]|owned-font-inode\n')
-                action = ('echo default > "$MODDIR/config/active_font.conf"'
-                          if stop == 'default' else f'touch "$MODDIR/{stop}"')
-                with self.assertRaises(subprocess.CalledProcessError) as failed:
-                    self.service(20, action, TEST_THEME_RESTORE_FAILURES='99')
-                self.assertEqual(failed.exception.returncode, 1)
-                self.assertEqual((self.root / 'theme-restored').read_text().splitlines(),
-                                 ['restored'] * 3)
-                self.assertEqual((self.root / 'theme-applied').read_text().splitlines(), ['theme-one'])
-                self.assertEqual(journal.read_text(), 'mnt:[123]|owned-font-inode\n')
-                self.assertIn('attempt 3/3',
-                              (self.module / 'logs/google-font-provider.log').read_text())
-                self.assertFalse((self.module / '.google-font-provider.lock').exists())
-
-    def test_removed_module_does_not_recreate_cleanup_files(self):
-        self.theme_fixture()
-        self.service(4, 'rm -rf "$MODDIR"')
-        self.assertFalse(self.module.exists())
-        self.assertFalse((self.root / 'theme-restored').exists())
-
-    def test_theme_restore_retry_pause_is_cancelled_with_service(self):
-        self.theme_fixture()
+    def test_restore_failure_bounded_and_journal_retained(self):
         self.active.write_text('default\n')
-        self.commands('sleep', '''
-echo $$ > "$TEST_ROOT/retry-sleep-pid"
-exec /bin/sleep 30
-''')
-        process = subprocess.Popen(
-            ['sh', str(ROOT / 'common/google_font_provider_service.sh')],
-            env={**self.env, 'TEST_THEME_RESTORE_FAILURES': '99'},
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        journal=self.module/'config/provider-journal';journal.write_text('owned')
+        self.assertEqual(self.service(TEST_RESTORE_RC='1').returncode,1)
+        self.assertEqual((self.root/'restored').read_text().splitlines(),['restore']*3)
+        self.assertEqual(journal.read_text(),'owned')
+
+    def test_singleton_is_owned_before_boot_wait(self):
+        self.commands('getprop','[ -s "$MODDIR/.google-font-provider.lock/pid" ] || touch "$TEST_ROOT/unlocked"\necho 1\n')
+        self.service();self.assertFalse((self.root/'unlocked').exists())
+
+    def test_cancel_reaps_owned_retry_sleep(self):
+        self.active.write_text('default\n')
+        self.commands('sleep','echo $$ > "$TEST_ROOT/sleep-pid"\nexec /bin/sleep 30\n')
+        p=subprocess.Popen(['sh',str(ROOT/'common/google_font_provider_service.sh')],
+            env={**self.env,'TEST_RESTORE_RC':'1'},stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
-            pid_file = self.root / 'retry-sleep-pid'
-            deadline = time.monotonic() + 5
-            while not pid_file.exists() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            self.assertTrue(pid_file.exists(), 'service did not reach restore retry pause')
-            child_pid = int(pid_file.read_text())
-            process.terminate()
-            process.communicate(timeout=5)
-            self.assertEqual(process.returncode, 143)
-            with self.assertRaises(ProcessLookupError):
-                os.kill(child_pid, 0)
-            self.assertFalse((self.module / '.google-font-provider.lock').exists())
+            deadline=time.monotonic()+5
+            while not (self.root/'sleep-pid').exists() and time.monotonic()<deadline:time.sleep(.02)
+            self.assertTrue((self.root/'sleep-pid').exists())
+            pid=int((self.root/'sleep-pid').read_text())
+            p.terminate();out,err=p.communicate(timeout=5)
+            self.assertEqual(p.returncode,143,err)
+            self.assertFalse(Path('/proc',str(pid)).exists())
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.communicate(timeout=5)
-
-    def test_idle_boot_discovery_does_not_apply_twenty_four_times(self):
-        self.assertEqual(self.service(0, LUOSHU_GOOGLE_FONT_RETRIES="24"),
-                         ["boot-cache-and-namespace|1"])
-
-    def test_boot_discovery_still_catches_new_download_after_initial_success(self):
-        self.assertEqual(self.service(0, '''
-if [ "$count" = 12 ]; then printf 'late-boot-download\\n' > "$TEST_SNAPSHOT"; fi
-''', LUOSHU_GOOGLE_FONT_RETRIES="24"),
-                         ["boot-cache-and-namespace|1", "late-boot-download|1"])
-
-    def test_stable_boot_failure_has_thirty_second_backoff(self):
-        self.assertEqual(self.service(0, LUOSHU_GOOGLE_FONT_RETRIES="24", TEST_APPLY_RC="1"),
-                         ["boot-cache-and-namespace|1"] * 4)
-
-    def test_singleton_is_owned_before_boot_wait_starts(self):
-        self.commands("getprop", '''
-[ -s "$MODDIR/.google-font-provider.lock/pid" ] || touch "$TEST_ROOT/unlocked-boot-wait"
-echo 1
-''')
-        self.assertEqual(self.service(0), ["boot-cache-and-namespace|1"])
-        self.assertFalse((self.root / "unlocked-boot-wait").exists())
-
-    def test_persistent_error_log_rotates_and_retains_latest_event(self):
-        logs = self.module / "logs"
-        logs.mkdir()
-        log = logs / "google-font-provider.log"
-        previous = b"x" * 1048576
-        log.write_bytes(previous)
-        subprocess.run(["sh", "-c", '. "$1"; _gfp_log repaired', "sh",
-                        str(ROOT / "common/google_font_provider_bridge.sh")],
-                       env=self.env, check=True, capture_output=True, timeout=5)
-        self.assertEqual(Path(str(log) + ".1").read_bytes(), previous)
-        self.assertIn("repaired", log.read_text())
-        self.assertLess(log.stat().st_size, 1024)
-
-    def test_no_downloaded_files_does_not_launch_python_or_scan_processes(self):
-        script = '''. "$1"
-_gfp_targets() { :; }
-_gfp_python() { echo unexpected-python >&2; return 91; }
-_gfp_namespace_pids() { echo unexpected-process-scan >&2; return 92; }
-_gfp_apply_once
-rc=$?
-[ "$rc" = 2 ] || exit "$rc"
-_gfp_fingerprint
-'''
-        result = subprocess.run(["sh", "-c", script, "sh",
-                                 str(ROOT / "common/google_font_provider_bridge.sh")],
-                                env=self.env, capture_output=True, text=True, timeout=5)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
-        self.assertRegex(result.stdout, r"^[a-f0-9]{64}\n$")
-
-    def test_partial_failure_retries_at_five_minutes_not_each_watch(self):
-        self.assertEqual(self.service(11, TEST_APPLY_RC="1"),
-                         ["boot-cache-and-namespace|1", "boot-cache-and-namespace|0"])
-
-    def test_no_download_yet_is_not_a_repeated_failure(self):
-        self.assertEqual(self.service(11, TEST_APPLY_RC="2"), ["boot-cache-and-namespace|1"])
-
-    def test_new_download_during_apply_is_not_hidden_by_post_apply_snapshot(self):
-        applied = self.service(3, '''
-if [ "$count" = 1 ]; then
-    printf 'first-late-font\\n' > "$TEST_SNAPSHOT"
-    printf 'arrived-during-repair\\n' > "$TEST_ROOT/during-apply"
-fi
-''')
-        self.assertEqual(applied, ["boot-cache-and-namespace|1", "first-late-font|0",
-                                   "arrived-during-repair|0"])
-
-    def test_last_boot_apply_does_not_mask_late_download(self):
-        (self.root / "during-apply").write_text("arrived-during-boot-apply\n")
-        self.assertEqual(self.service(2), ["boot-cache-and-namespace|1",
-                                           "arrived-during-boot-apply|0"])
-
-    def test_interrupted_apply_also_retries(self):
-        self.assertEqual(self.service(11, TEST_APPLY_RC="137"),
-                         ["boot-cache-and-namespace|1", "boot-cache-and-namespace|0"])
-
-    def test_default_or_disabled_module_stops_watch_before_repair(self):
-        for stop in ("default", "disable", "remove"):
-            with self.subTest(stop=stop):
-                self.active.write_text("custom\n")
-                self.marker.unlink(missing_ok=True)
-                for name in ("disable", "remove"):
-                    (self.module / name).unlink(missing_ok=True)
-                action = ('printf "default\\n" > "$MODDIR/config/active_font.conf"'
-                          if stop == "default" else f'touch "$MODDIR/{stop}"')
-                self.assertEqual(self.service(3, action), ["boot-cache-and-namespace|1"])
+            if p.poll() is None:p.kill();p.communicate(timeout=5)
 
     def fingerprint(self, paths, pids):
         script = '. "$1"; _gfp_namespace_pids() { cat "$TEST_PIDS"; }; _gfp_fingerprint'

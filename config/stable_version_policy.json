@@ -1,6 +1,6 @@
 {
   "schema": "luoshu-stable-version-policy-v3",
-  "authorizedAt": "2026-09-22T04:14:35Z",
+  "authorizedAt": "2026-09-28T13:25:11Z",
   "series": "refactor",
   "effectiveFrom": "v1.0.0",
   "currentStable": "v2.0.0",

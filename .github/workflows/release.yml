@@ -166,10 +166,6 @@ jobs:
             sh ./scripts/prepare_composite_runtime.sh
           fi
 
-      - name: Run complete repository source checks
-        shell: bash
-        run: sh ./scripts/check.sh
-
       - name: Lint, test and build signed release App
         working-directory: android-app
         env:

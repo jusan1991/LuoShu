@@ -26,7 +26,6 @@ def slot(
     *,
     postscript: str = "",
     weight: int = 400,
-    outline_weight: int | None = None,
     roles: list[str] | None = None,
     replaceable: bool = True,
     status: str = "ready",
@@ -52,8 +51,6 @@ def slot(
         result["generatedFile"] = generated
         result["generatedBytes"] = 4096
         result["signature"] = generated
-        result["outlineWeight"] = outline_weight if outline_weight is not None else weight
-        result["weightMatched"] = abs(result["outlineWeight"] - weight) <= 50
     return result
 
 
@@ -86,7 +83,7 @@ def main() -> None:
             system_primary,
             """<?xml version='1.0' encoding='utf-8'?>
 <familyset>
-  <family name='sans-serif'><font weight='700' style='normal'>Roboto-Regular.ttf</font></family>
+  <family name='sans-serif'><font weight='400' style='normal'>Roboto-Regular.ttf</font></family>
   <family name='emoji-family' lang='und-Zsye'><font weight='400' style='normal'>NotoColorEmoji.ttf</font></family>
 </familyset>
 """,
@@ -95,7 +92,7 @@ def main() -> None:
             system_legacy,
             """<?xml version='1.0' encoding='utf-8'?>
 <familyset>
-  <family name='sans-serif'><font weight='700' style='normal'>Roboto-Regular.ttf</font></family>
+  <family name='sans-serif'><font weight='400' style='normal'>Roboto-Regular.ttf</font></family>
 </familyset>
 """,
         )
@@ -131,14 +128,13 @@ def main() -> None:
             "LuoShuSlot-mi-400.ttf",
             "LuoShuSlot-google-400.ttf",
             "LuoShuSlot-mono-400.ttf",
-            "LuoShuSlot-hidden-400.ttf",
         }
         for name in generated:
             (fonts / name).write_bytes((name.encode("utf-8") + b"\0") * 256)
 
         slots = [
-            slot(system_primary, "sans-serif", "Roboto-Regular.ttf", "LuoShuSlot-ui-400.ttf", weight=700, outline_weight=400),
-            slot(system_legacy, "sans-serif", "Roboto-Regular.ttf", "LuoShuSlot-ui-400.ttf", weight=700, outline_weight=400),
+            slot(system_primary, "sans-serif", "Roboto-Regular.ttf", "LuoShuSlot-ui-400.ttf"),
+            slot(system_legacy, "sans-serif", "Roboto-Regular.ttf", "LuoShuSlot-ui-400.ttf"),
             slot(product_xml, "mi-sans", "MiSans-Regular.ttf", "LuoShuSlot-mi-400.ttf"),
             slot(
                 product_xml,
@@ -176,19 +172,7 @@ def main() -> None:
                 replaceable=False,
                 status="skipped",
             ),
-            slot(
-                "",
-                "inventory-hidden-ui",
-                "NestedUi.ttf",
-                "LuoShuSlot-hidden-400.ttf",
-                roles=["global-ui"],
-            ),
         ]
-        slots[-1]["stockPath"] = "/product/vivo/fonts/NestedUi.ttf"
-        slots[-1]["inventoryPath"] = "/product/vivo/fonts/NestedUi.ttf"
-        slots[-1]["directPhysical"] = True
-        for index, item in enumerate(slots):
-            item["slotIndex"] = index
         template = {
             "schema": "device-font-template-v1",
             "fingerprint": "overlay-fixture-rom",
@@ -219,12 +203,12 @@ def main() -> None:
             overlay.PRIMARY_SYSTEM_XMLS = original_primary
 
         assert report["summary"] == {
-            "mappedSlots": 6,
+            "mappedSlots": 5,
             "rewrittenSlots": 4,
             "dynamicSlots": 1,
-            "directPhysicalSlots": 1,
+            "directPhysicalSlots": 0,
             "dynamicInjectedFonts": 2,
-            "uniqueCopiedFonts": 5,
+            "uniqueCopiedFonts": 4,
             "xmlOutputs": 3,
             "incompleteDynamicFamilies": 1,
         }, report["summary"]
@@ -245,14 +229,6 @@ def main() -> None:
             assert "google-sans" in names
             assert "LuoShuSlot-ui-400.ttf" in texts
             assert "LuoShuSlot-google-400.ttf" in texts
-            tree = ET.parse(path)
-            ui_nodes = [
-                node for node in tree.getroot().iter()
-                if node.tag.rsplit("}", 1)[-1] == "font"
-                and (node.text or "").strip() == "LuoShuSlot-ui-400.ttf"
-            ]
-            assert len(ui_nodes) == 1
-            assert ui_nodes[0].attrib.get("weight") == "400", ui_nodes[0].attrib
         assert "NotoColorEmoji.ttf" in font_texts(output_primary)
         assert "LuoShuSlot-mi-400.ttf" in font_texts(output_product)
         assert "LuoShuSlot-mono-400.ttf" in font_texts(output_product)
@@ -268,17 +244,6 @@ def main() -> None:
         assert (output / "system/fonts/LuoShuSlot-google-400.ttf").is_file()
         assert (output / "product/fonts/LuoShuSlot-mi-400.ttf").is_file()
         assert (output / "product/fonts/LuoShuSlot-mono-400.ttf").is_file()
-        assert (output / "product/vivo/fonts/NestedUi.ttf").is_file()
-        direct_results = [
-            item for item in report["slotResults"]
-            if item.get("inventoryPath") == "/product/vivo/fonts/NestedUi.ttf"
-        ]
-        assert len(direct_results) == 1, direct_results
-        assert direct_results[0]["state"] == "mapped"
-        assert direct_results[0]["route"] == "physical"
-        assert direct_results[0]["targetPath"] == "product/vivo/fonts/NestedUi.ttf"
-        preserved = [item for item in report["slotResults"] if item.get("planStatus") == "skipped"]
-        assert preserved and all(item["state"] == "preserved" for item in preserved)
         assert report["dynamicMounts"] == [
             {"source": "dynamic/data-fonts-config.xml", "target": str(dynamic_xml)}
         ]

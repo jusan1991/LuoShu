@@ -107,9 +107,7 @@ _boot_verify_worker() {
                 >> "$LOG_FILE" 2>/dev/null || true
             _rc=2
         elif [ -f "$VERIFY_SCRIPT" ]; then
-            # Boot verification is the right time for the heavier per-slot
-            # evidence pass; status-only checks deliberately remain lightweight.
-            MODDIR="$MODDIR" MODULE_DIR="$MODDIR" sh "$VERIFY_SCRIPT" verify
+            MODDIR="$MODDIR" MODULE_DIR="$MODDIR" sh "$VERIFY_SCRIPT"
             _rc=$?
         else
             _boot_verify_write_pending verifier-missing

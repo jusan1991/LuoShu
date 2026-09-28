@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from host_task_scope_fixture import install_task_scope
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,6 +66,7 @@ class SwitchProviderTest(unittest.TestCase):
             env=self.env, capture_output=True, text=True)
 
     def test_provider_service_recovers_empty_lock_from_previous_boot(self):
+        install_task_scope(self.module)
         marker = self.root / 'bridge-applied'
         service = self.module / 'common/google_font_provider_service.sh'
         shutil.copyfile(ROOT / 'common/google_font_provider_service.sh', service)
@@ -84,9 +86,7 @@ class SwitchProviderTest(unittest.TestCase):
         self.assertFalse(lock.exists())
         marker.unlink()
         (self.module / 'config/active_font.conf').write_text('default\n')
-        # Default now pauses rather than permanently exiting the boot guard.
-        # Bound this lock/no-replacement fixture explicitly; the resume suite
-        # exercises default -> custom and cancellation of the live watcher.
+        # Default restores and exits; later selections require a new explicit pass.
         subprocess.run(['sh', str(service)], env={**self.env,
             'TEST_APPLIED': str(marker), 'LUOSHU_GOOGLE_FONT_RETRIES': '1',
             'LUOSHU_GOOGLE_FONT_WATCH_CYCLES': '0'}, check=True, timeout=5)
@@ -163,12 +163,13 @@ exec "$TEST_REAL_CP" "$@"
                 self.assertEqual((source / 'system/fonts/.luoshu-font-store/old.font').read_bytes(), original)
 
     def test_real_switch_router_commits_only_successful_stages(self):
+        install_task_scope(self.module)
+        shutil.copyfile(ROOT / 'common/font_role_policy.py', self.module / 'common/font_role_policy.py')
         legacy = self.module / 'common/legacy_v14_4'
         legacy.mkdir()
         for name in ('font_switch_safe.sh', 'payload_clone.sh'):
             shutil.copyfile(ROOT / 'common/legacy_v14_4' / name, legacy / name)
         shutil.copyfile(ROOT / 'common/font_switch_lock.sh', self.module / 'common/font_switch_lock.sh')
-        shutil.copyfile(ROOT / 'common/font_provenance.sh', self.module / 'common/font_provenance.sh')
         (legacy / 'util_functions.sh').write_text('''
 check_coloros() { IS_COLOROS=false; }
 check_hyperos() { IS_HYPEROS=false; }
@@ -204,14 +205,13 @@ apply_font_by_rom() {
         self.assertEqual(old.read_bytes(), before)
         self.assertFalse((self.module / '.luoshu-payload-next').exists())
         cache_confs = list((self.module / 'config/safe-switch-cache').glob('*/cache.conf'))
-        self.assertTrue(cache_confs)
-        cache_root = cache_confs[0].parent
-        self.assertFalse((cache_root / 'tree/future_oem/fonts/OldDynamic.ttf').exists(),
-                         'discovered OEM partitions must not retain stale font payloads')
+        self.assertFalse(cache_confs, 'retired background prewarm must not generate caches')
         success = subprocess.run(command, env=env, capture_output=True, text=True, timeout=5)
         self.assertEqual(success.returncode, 0, success.stdout + success.stderr)
         self.assertIn('"status":"ok"', success.stdout)
         pending = self.module / '.luoshu-payload-next'
+        self.assertFalse((pending / 'future_oem/fonts/OldDynamic.ttf').exists(),
+                         'explicit switch must discard stale discovered partition payloads')
         self.assertEqual((pending / 'system/fonts/Roboto-Regular.ttf').read_bytes(),
                          (public / 'fonts/Selected.ttf').read_bytes())
         self.assertEqual(old.read_bytes(), before)

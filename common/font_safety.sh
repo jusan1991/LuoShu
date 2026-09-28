@@ -173,6 +173,7 @@ EOF_LUOSHU_DYNAMIC_TARGETS
         _ldt_weight="$_ldt_b"
         _ldt_family="$_ldt_c"
         _ldt_role="$_ldt_d"
+        [ "$_ldt_role" = mono ] && continue
         case "$_ldt_file" in
             */*|*'..'*|LuoShu-*.ttf|LuoShuMono-*.ttf) continue ;;
             *.ttf|*.otf|*.ttc) ;;
@@ -182,11 +183,7 @@ EOF_LUOSHU_DYNAMIC_TARGETS
         _ldt_rel="${_ldt_font_dir#$_ldt_module/}/$_ldt_file"
         grep -Fq "$_ldt_rel|" "$_ldt_manifest_tmp" 2>/dev/null && continue
         _ldt_targets=$((_ldt_targets + 1))
-        if [ "$_ldt_role" = mono ]; then
-            _ldt_source="$_ldt_module/system/fonts/LuoShuMono-${_ldt_weight}.ttf"
-        else
-            _ldt_source="$_ldt_module/system/fonts/LuoShu-${_ldt_weight}.ttf"
-        fi
+        _ldt_source="$_ldt_module/system/fonts/LuoShu-${_ldt_weight}.ttf"
         _ldt_dest="$_ldt_font_dir/$_ldt_file"
         [ -s "$_ldt_source" ] || continue
         mkdir -p "$_ldt_font_dir" 2>/dev/null || continue

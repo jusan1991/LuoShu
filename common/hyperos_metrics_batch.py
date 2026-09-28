@@ -20,76 +20,26 @@ from fontTools import subset
 from font_metrics_normalize import _device_build_key, _pick_face, _promote_os2_for_typo_metrics
 from font_slot_coverage import (is_han, is_cjk_routing_codepoint, remove_cjk_mappings,
                                 preferred_unicode_codepoints, valid_coverage)
-from hyperos_physical_policy import preserved_dynamic_alias, safe_physical_font_name
+from hyperos_physical_policy import preserved_dynamic_alias, safe_physical_font_name, _EXCLUDED
+from font_role_policy import (is_code_monospace, is_clock_slot, slot_for,
+                              protected_aliases, record_preserved, assert_isolated)
+import font_slot_weight as slot_weight
+from font_config_overlay import is_safe_family
 
 PARTS = ("system", "system_ext", "product", "mi_ext", "vendor", "odm", "oem",
          "my_product", "hw_product", "cust")
 
 
 def weight_for_name(name: str) -> int:
-    stem = Path(name).stem.lower()
-    if stem.isdigit() and 100 <= int(stem) <= 900:
-        return int(stem)
-    for terms, weight in ((('extrabold', 'extra-bold'), 800),
-                          (('semibold', 'semi-bold', 'demibold'), 600),
-                          (('extralight', 'extra-light'), 200),
-                          (('black', 'heavy'), 900), (('bold',), 700),
-                          (('medium',), 500), (('light',), 300), (('thin',), 100)):
-        if any(term in stem for term in terms):
-            return weight
-    return 400
+    return slot_weight.named_weight(name) or 400
 
 
 def nonempty(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
-WEIGHT_ROLES = {
-    100: 'thin', 200: 'extralight', 300: 'light', 400: 'regular',
-    500: 'medium', 600: 'semibold', 700: 'bold', 800: 'extrabold', 900: 'black',
-}
-
-
-class MissingWeightSource(ValueError):
-    pass
-
-
-def pick_source(fonts: Path, name: str) -> Path:
-    weight = weight_for_name(name)
-    store = fonts / '.luoshu-font-store'
-    role = WEIGHT_ROLES.get(weight, 'regular')
-
-    # Weight-specific physical files must be backed by a real matching static
-    # source. The old fallback chain eventually returned regular.font for
-    # Roboto-Bold/700.ttf, recreating exactly the “status bar digits become
-    # thin” failure even after the aligned builder learned real weight truth.
-    exact = (
-        fonts / f'LuoShu-{weight}.ttf',
-        store / f'wght-{weight}.font',
-        store / f'{role}.font',
-        fonts / f'{weight}.ttf',
-    )
-    for path in exact:
-        if nonempty(path):
-            return path
-
-    if weight != 400:
-        raise MissingWeightSource(f'缺少真实 {weight} 字重源：{name}')
-
-    # Only the Regular class may use generic/staged regular fallbacks.
-    regular = (
-        fonts / name,
-        store / 'mix-composite.font',
-        store / 'regular.font',
-        store / 'compact-regular.font',
-        fonts / '400.ttf',
-        fonts / 'MiSansVF.ttf',
-        fonts / 'Roboto-Regular.ttf',
-    )
-    for path in regular:
-        if nonempty(path):
-            return path
-    raise ValueError(f'没有可用的源字体：{name}')
+def pick_source(fonts: Path, name: str, weight: int | None = None) -> Path:
+    return slot_weight.source_for(fonts, name, weight or weight_for_name(name))
 
 
 def read_inventory(module: Path) -> dict:
@@ -191,6 +141,13 @@ def compact_routed_source(source: Path, output: Path, routing: frozenset[int],
     face = _pick_face(source)
     kwargs = {'fontNumber': face} if face >= 0 else {}
     with TTFont(source, lazy=True, recalcBBoxes=False, recalcTimestamp=False, **kwargs) as font:
+        # The bundled Android runtime has no lxml. An SVG table uses glyph IDs;
+        # dropping it or passing it unchanged through a renumbering subset can
+        # silently corrupt decorative glyphs. Keep this donor intact instead.
+        # write_metrics still prunes ONLY its routed cmap and preserves glyph IDs,
+        # SVG documents and outlines. This path trades size for fidelity.
+        if 'SVG ' in font:
+            return source, 0
         removed = remove_cjk_mappings(font, routing, stock_punctuation)
         if not removed:
             return source, 0
@@ -299,7 +256,8 @@ def write_metrics(source: Path, output: Path, contract: tuple,
                   'bitmapBaselineCorrection': bottom_correction,
                   'bitmapBaselineReason': bottom_reason,
                   'layoutBoundsDifferFromSource': source_frame != (head.yMin, head.yMax),
-                  'removedCjkMappings': removed}
+                  'removedCjkMappings': removed,
+                  'svgPreserved': 'SVG ' in font}
     os.chmod(output, 0o644)
     return report
 
@@ -413,15 +371,51 @@ def _cjk_routing(data: dict, logical: str, fallback: frozenset[int]) -> tuple:
     return fallback, frozenset(coverage['cjkPunctuation']), 'stock-latin-primary'
 
 
+def inventory_target(data: dict, logical: str) -> bool:
+    """Accept a trusted, single-face text slot even with an unknown OEM name."""
+    path = Path(logical)
+    if (len(path.parts) != 4 or path.parts[0] != '/' or path.parts[1] not in PARTS
+            or path.parts[2] != 'fonts' or path.suffix not in ('.ttf', '.otf')
+            or '..' in path.parts):
+        return False
+    slot = slot_for(data, logical)
+    if not slot or slot.get('path', logical) != logical:
+        return False
+    if is_code_monospace(path.name, slot) or slot.get('style', 'normal') != 'normal':
+        return False
+    if slot.get('format', slot.get('validatedFormat')) in ('TTC', 'OTC'):
+        return False
+    try:
+        if int(slot.get('faceIndex', 0)) != 0:
+            return False
+    except (ValueError, TypeError):
+        return False
+    lower = path.name.lower().replace('semicondensed', '')
+    if 'icon' in lower or any(token in lower for token in _EXCLUDED):
+        return False
+    coverage = slot.get('metrics', {}).get('coverage')
+    if not valid_coverage(coverage) or contract_for_slot(data, logical)[-1] != 'stock':
+        return False
+    role = (any(is_safe_family(f) for f in slot.get('families', []) if isinstance(f, str))
+            or logical == data.get('mainSlotPath')
+            or is_clock_slot(path.name, slot)
+            or (slot.get('source') == 'verified-scan' and
+                (coverage['hanCount'] >= 512 or
+                 (coverage['latinCount'] >= 52 and coverage['unicodeCount'] >= 96))))
+    return role and (coverage['hasLatin'] or coverage['hasHan']
+                     or (coverage.get('hasDigits', False) and is_clock_slot(path.name, slot)))
+
+
 def build(module: Path, stage: Path, names: list[str]) -> dict:
-    if stage.resolve() == (module / '.luoshu-payload').resolve():
-        raise ValueError('拒绝修改本次启动正在使用的字体负载')
+    assert_isolated(module, stage)
     fonts = stage / 'system/fonts'
     data = read_inventory(module)
     jobs = []
     preserved_aliases = []
-    preserved_weight_aliases = []
-    excluded_aliases = []
+    excluded_aliases = protected_aliases(stage, data)
+    trusted = {logical for logical in data.get('slots', {}) if inventory_target(data, logical)}
+    names = list(dict.fromkeys([*names, *(Path(logical).name for logical in sorted(trusted)
+                                                if not safe_physical_font_name(Path(logical).name))]))
     for part in PARTS:
         root = Path(os.environ.get(f'LUOSHU_{part.upper()}_FONTS_ROOT', f'/{part}/fonts'))
         staged_fonts = stage / part / 'fonts'
@@ -429,13 +423,20 @@ def build(module: Path, stage: Path, names: list[str]) -> dict:
             for alias in staged_fonts.iterdir():
                 if (alias.name.startswith(('NotoSans', 'MiSans', 'DroidSans'))
                         and alias.suffix in ('.ttf', '.otf')
-                        and not safe_physical_font_name(alias.name)):
+                        and not safe_physical_font_name(alias.name)
+                        and '/' + alias.relative_to(stage).as_posix() not in trusted):
                     excluded_aliases.append(alias)
         for name in dict.fromkeys(names):
             if Path(name).name != name or not name.endswith(('.ttf', '.otf')):
                 raise ValueError(f'不安全的字体槽位：{name}')
             logical = f'/{part}/fonts/{name}'
-            if not safe_physical_font_name(name):
+            original = slot_for(data, logical)
+            # A filename can conceal a collection used at a nonzero XML face.
+            # Never replace that stock container with our single-face output.
+            collection_target = (original.get('format', original.get('validatedFormat')) in ('TTC', 'OTC')
+                                 or str(original.get('faceIndex', 0)) not in ('0', 'None'))
+            if (collection_target or is_code_monospace(name, original) or
+                    (not safe_physical_font_name(name) and logical not in trusted)):
                 # Never let a stale inventory/target list recreate obsolete
                 # language aliases. Removing only its isolated staged alias
                 # exposes the untouched ROM font when the payload is mounted.
@@ -445,16 +446,9 @@ def build(module: Path, stage: Path, names: list[str]) -> dict:
                 preserved_aliases.append(stage / part / 'fonts' / name)
                 continue
             if (root / name).exists():
-                try:
-                    source = pick_source(fonts, name)
-                except MissingWeightSource:
-                    # Remove any generic Regular alias staged earlier so Overlay
-                    # falls through to the ROM's genuine weight file.
-                    preserved_weight_aliases.append(stage / part / 'fonts' / name)
-                    continue
-                jobs.append((source, stage / part / 'fonts' / name,
+                jobs.append((pick_source(fonts, name, slot_weight.requested_weight(data, logical)), stage / part / 'fonts' / name,
                              contract_for_slot(data, logical)))
-    if not jobs and not preserved_weight_aliases:
+    if not jobs:
         raise ValueError('没有找到当前 ROM 的 HyperOS 字体目标')
     cjk_fallback = _staged_cjk_fallback(data, jobs, stage)
     store = fonts / '.luoshu-font-store'
@@ -462,6 +456,7 @@ def build(module: Path, stage: Path, names: list[str]) -> dict:
     outputs = Path(tempfile.mkdtemp(prefix='hyperos-metrics-', dir=store))
     cache = {}
     compact_sources = {}
+    weight_sources = {}
     output_reports = {}
     # Generate every distinct source/contract before replacing even one alias.
     # Thus subsequent sources cannot accidentally refer to earlier outputs.
@@ -470,8 +465,17 @@ def build(module: Path, stage: Path, names: list[str]) -> dict:
     fallback = 0
     try:
         for source, dest, contract in jobs:
-            stat = source.stat()
             logical = '/' + dest.relative_to(stage).as_posix()
+            donor_stat = source.stat()
+            weight = slot_weight.requested_weight(data, logical)
+            keep_variable = slot_weight.variable_target(data, logical)
+            weight_key = (donor_stat.st_dev, donor_stat.st_ino, donor_stat.st_size,
+                          donor_stat.st_mtime_ns, weight, keep_variable)
+            if weight_key not in weight_sources:
+                weight_sources[weight_key] = slot_weight.prepare(
+                    source, outputs / f'weight-{len(weight_sources)}.font', weight, keep_variable)
+            source, weight_report = weight_sources[weight_key]
+            stat = source.stat()
             routing, stock_punctuation, routing_reason = _cjk_routing(data, logical, cjk_fallback)
             if contract[-1] != 'stock':
                 routing, stock_punctuation, routing_reason = None, frozenset(), 'invalid-stock-contract'
@@ -504,13 +508,16 @@ def build(module: Path, stage: Path, names: list[str]) -> dict:
                                 'useTypoMetrics': contract[9],
                                 'cjkRoutingSource': 'stock-fallback' if routing else 'source',
                                 'cjkRoutingReason': routing_reason,
-                                **output_reports[key]})
+                                **output_reports[key], **weight_report,
+                                'targetDiscovery': 'inventory' if logical in trusted else 'physical-policy'})
         for output, dest in prepared:
             link_copy(output, dest)
-        for alias in preserved_aliases + preserved_weight_aliases + excluded_aliases:
-            # Initial generic mapping may have created these as Regular aliases.
-            # Their absence exposes the ROM lower font, preserving the correct
-            # script/weight until a real source face exists.
+        record_preserved(stage, ['/' + alias.relative_to(stage).as_posix()
+                                 for alias in excluded_aliases])
+        for alias in preserved_aliases + excluded_aliases:
+            # Initial generic mapping creates the alias as a regular font. Its
+            # absence exposes the ROM lower symlink in OverlayFS and leaves it
+            # untouched in per-file bind mode. Framework changes keep working.
             alias.unlink(missing_ok=True)
         report = stage / '.luoshu-metrics-report.json'
         report.write_text(json.dumps({'schema': 'luoshu-slot-metrics-v1',
@@ -518,19 +525,10 @@ def build(module: Path, stage: Path, names: list[str]) -> dict:
                                       'preservedDynamicAliases': [
                                           '/' + alias.relative_to(stage).as_posix()
                                           for alias in preserved_aliases],
-                                      'preservedWeightAliases': [
-                                          '/' + alias.relative_to(stage).as_posix()
-                                          for alias in preserved_weight_aliases],
                                       'preservedStockAliases': sorted({
                                           '/' + alias.relative_to(stage).as_posix()
                                           for alias in excluded_aliases if alias.parent.is_dir()})}, ensure_ascii=False), encoding='utf-8')
         report.chmod(0o644)
-        covered = stage / '.luoshu-metrics-covered.lst'
-        covered.write_text(
-            ''.join(f"{item['slot']}\n" for item in sorted(slot_report, key=lambda item: item['slot'])),
-            encoding='utf-8',
-        )
-        covered.chmod(0o644)
     finally:
         # Every prepared result has its own hard link (or copy) in the final
         # alias. Keeping these temporary names after success only enlarges

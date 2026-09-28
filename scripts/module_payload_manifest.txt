@@ -4,17 +4,17 @@
 common/app_bridge.sh
 common/app_installer.sh
 common/background_task.sh
+common/task_scope.sh
+common/task_scope.py
 common/coloros_global.sh
 common/coloros_metrics_batch.py
 common/coloros_stage_complete.sh
 common/composite_font.py
-common/coverage_payload_remediate.sh
 common/device_font_boot_verify.sh
 common/device_font_cache.sh
 common/device_font_dynamic_guard.sh
 common/device_font_load_verify.py
 common/device_font_load_verify.sh
-common/device_font_slot_trace.py
 common/device_font_payload_bridge.sh
 common/device_font_payload_build.py
 common/device_font_payload_build_base.py
@@ -67,7 +67,6 @@ common/font_mix.sh
 common/font_mix_controller.sh
 common/font_name_normalize.py
 common/font_provider_cache.sh
-common/font_provenance.sh
 common/font_switch_lock.sh
 common/font_validate_fast_v4.sh
 common/google_font_fallback_core.py
@@ -138,3 +137,7 @@ uninstall.sh
 action.sh
 boot-completed.sh
 magic
+common/font_role_policy.py
+common/font_slot_weight.py
+common/font_weight_retire.sh
+common/install_ui.sh

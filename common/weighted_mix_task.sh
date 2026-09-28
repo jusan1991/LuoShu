@@ -36,7 +36,6 @@ MODULE_DIR="$MODDIR"
 [ -f "$MODDIR/common/font_check.sh" ] && . "$MODDIR/common/font_check.sh"
 [ -f "$MODDIR/common/background_task.sh" ] && . "$MODDIR/common/background_task.sh"
 [ -f "$MODDIR/common/mix_task_handoff.sh" ] && . "$MODDIR/common/mix_task_handoff.sh"
-[ -f "$MODDIR/common/font_provenance.sh" ] && . "$MODDIR/common/font_provenance.sh"
 [ -f "$MODDIR/common/font_active_state.sh" ] && . "$MODDIR/common/font_active_state.sh"
 
 json_escape() {
@@ -225,25 +224,18 @@ rewrite_public_config() {
     _cjk_axes=$(read_value "$TASK_FILE" cjkAxes)
     _latin_axes=$(read_value "$TASK_FILE" latinAxes)
     _digit_axes=$(read_value "$TASK_FILE" digitAxes)
-    _mix_proof=''
-    if type luoshu_provenance_mix_proof >/dev/null 2>&1; then
-        _mix_proof=$(luoshu_provenance_mix_proof             "$_cjk" "$_latin" "$_digit"             "$_cjk_axes" "$_latin_axes" "$_digit_axes"             fixed fixed fixed "$USER_FONTS_DIR" 2>/dev/null) || _mix_proof=''
-    fi
     _tmp="$MIX_CONF.axes.$$"
     {
         printf 'cjk=%s\nlatin=%s\ndigit=%s\n' "$_cjk" "$_latin" "$_digit"
-        printf 'cjkWeight=%s\nlatinWeight=%s\ndigitWeight=%s\n'             "$(safe_weight "$_cjk_axes")" "$(safe_weight "$_latin_axes")" "$(safe_weight "$_digit_axes")"
+        printf 'cjkWeight=%s\nlatinWeight=%s\ndigitWeight=%s\n' \
+            "$(safe_weight "$_cjk_axes")" "$(safe_weight "$_latin_axes")" "$(safe_weight "$_digit_axes")"
         printf 'cjkAxes=%s\nlatinAxes=%s\ndigitAxes=%s\n' "$_cjk_axes" "$_latin_axes" "$_digit_axes"
-        printf 'cjkMode=fixed\nlatinMode=fixed\ndigitMode=fixed\n'
-        if [ -n "$_mix_proof" ]; then
-            printf 'provenanceSchema=font-provenance-v1\n'
-            printf 'mixProof=%s\n' "$_mix_proof"
-        fi
-        [ ! -f "$MIX_CONF" ] || grep -v -E '^(cjk|latin|digit|cjkWeight|latinWeight|digitWeight|cjkAxes|latinAxes|digitAxes|cjkMode|latinMode|digitMode|provenanceSchema|mixProof)=' "$MIX_CONF" 2>/dev/null
+        [ ! -f "$MIX_CONF" ] || grep -v -E '^(cjk|latin|digit|cjkWeight|latinWeight|digitWeight|cjkAxes|latinAxes|digitAxes)=' "$MIX_CONF" 2>/dev/null
     } >"$_tmp" 2>/dev/null && mv -f "$_tmp" "$MIX_CONF" 2>/dev/null
     cp -f "$MIX_CONF" "$AXES_CONF" 2>/dev/null || true
     chmod 0644 "$MIX_CONF" "$AXES_CONF" 2>/dev/null || true
 }
+
 worker() {
     trap '' HUP
     _wanted="$1"
@@ -426,26 +418,10 @@ start_mix() {
         printf '{"status":"error","message":"本次开机已更改文字字体，请先重启手机"}\n'; return
     }
     if [ -s "$WORKER_PID" ]; then
-        _old_task=$(read_value "$TASK_FILE" task)
-        if type luoshu_task_pid_alive >/dev/null 2>&1; then
-            if [ -n "$_old_task" ] && luoshu_task_pid_alive "$WORKER_PID" "$_old_task"; then
-                printf '{"status":"error","message":"已有字体组合任务正在运行"}\n'
-                return
-            fi
-            # A bare PID can be recycled by Android. If task/boot/cmdline identity
-            # does not match the saved LuoShu task, release the stale sidecar now.
-            if type luoshu_clear_task_pid >/dev/null 2>&1; then
-                luoshu_clear_task_pid "$WORKER_PID" "$_old_task"
-            else
-                rm -f "$WORKER_PID" "${WORKER_PID}.task" "${WORKER_PID}.boot" 2>/dev/null || true
-            fi
-        else
-            _old=$(cat "$WORKER_PID" 2>/dev/null)
-            [ -z "$_old" ] || ! kill -0 "$_old" 2>/dev/null || {
-                printf '{"status":"error","message":"已有字体组合任务正在运行"}\n'
-                return
-            }
-        fi
+        _old=$(cat "$WORKER_PID" 2>/dev/null)
+        [ -z "$_old" ] || ! kill -0 "$_old" 2>/dev/null || {
+            printf '{"status":"error","message":"已有字体组合任务正在运行"}\n'; return
+        }
     fi
     if type luoshu_font_lock_busy >/dev/null 2>&1; then
         if luoshu_font_lock_busy "$LOCK_FILE"; then
@@ -460,8 +436,7 @@ start_mix() {
     [ -n "$_cjk_axes" ] || _cjk_axes='wght=400'
     [ -n "$_latin_axes" ] || _latin_axes='wght=400'
     [ -n "$_digit_axes" ] || _digit_axes='wght=400'
-    if [ "${LUOSHU_FORCE_REBUILD:-0}" != 1 ] && \
-       type luoshu_mix_request_matches_active >/dev/null 2>&1 && \
+    if type luoshu_mix_request_matches_active >/dev/null 2>&1 && \
        luoshu_mix_request_matches_active "$_cjk" "$_latin" "$_digit" \
            "$_cjk_axes" "$_latin_axes" "$_digit_axes" fixed fixed fixed; then
         _request="axes-reuse-$(date +%s)-$$"

@@ -21,7 +21,7 @@ class TaskCenterModelTest {
         assertEquals(TaskKind.IMPORT, tasks[1].kind)
         assertEquals(TaskPhase.SUCCESS, tasks[1].phase)
         assertEquals(TaskKind.SCAN, tasks[2].kind)
-        assertEquals(TaskPhase.RUNNING, tasks[2].phase)
+        assertEquals(TaskPhase.INFO, tasks[2].phase)
     }
 
     @Test
@@ -56,7 +56,7 @@ class TaskCenterModelTest {
         ).single()
 
         assertEquals(TaskKind.MIX, task.kind)
-        assertEquals(TaskPhase.RUNNING, task.phase)
+        assertEquals(TaskPhase.INFO, task.phase)
         assertEquals(68, task.progress)
     }
 

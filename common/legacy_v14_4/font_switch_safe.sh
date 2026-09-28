@@ -34,21 +34,18 @@ ACTIVE_FONT_CONF="$CONFIG_DIR/active_font.conf"
 LEGACY_MODE_CONF="$CONFIG_DIR/font_runtime_legacy_v14_4.conf"
 TEXT_REBOOT_REQUIRED="$CONFIG_DIR/text_reboot_required.conf"
 LOG_FILE="$MODDIR/logs/fontswitch.log"
-COVERAGE_REMEDIATE_HELPER="$MODDIR/common/coverage_payload_remediate.sh"
 SWITCH_LOCK="$MODDIR/.font_switch.lock"
 PROGRESS_FILE="${LUOSHU_SWITCH_PROGRESS_FILE:-}"
 SWITCH_CACHE_ROOT="$CONFIG_DIR/safe-switch-cache"
 SWITCH_VALIDATION_CACHE_ROOT="$CONFIG_DIR/safe-switch-validation"
-SWITCH_CACHE_SCHEMA="safe-switch-metrics-v3-coverage"
+SWITCH_CACHE_SCHEMA="safe-switch-metrics-v3-roles-real-weights"
 SWITCH_CACHE_MAX_ENTRIES="${LUOSHU_SWITCH_CACHE_MAX_ENTRIES:-3}"
 SWITCH_CACHE_MAX_KB="${LUOSHU_SWITCH_CACHE_MAX_KB:-786432}"
 case "$SWITCH_CACHE_MAX_ENTRIES" in ''|*[!0-9]*) SWITCH_CACHE_MAX_ENTRIES=3 ;; esac
 case "$SWITCH_CACHE_MAX_KB" in ''|*[!0-9]*) SWITCH_CACHE_MAX_KB=786432 ;; esac
 [ "$SWITCH_CACHE_MAX_ENTRIES" -ge 1 ] 2>/dev/null || SWITCH_CACHE_MAX_ENTRIES=1
 [ "$SWITCH_CACHE_MAX_KB" -ge 131072 ] 2>/dev/null || SWITCH_CACHE_MAX_KB=131072
-PREWARM_LOCK="$MODDIR/.safe-switch-prewarm.lock"
 LOCK_HELD=false
-PREWARM_LOCK_HELD=false
 
 export MODULE_DIR LUOSHU_PUBLIC_DIR="$USER_ROOT"
 [ -f "$LEGACY_DIR/util_functions.sh" ] && . "$LEGACY_DIR/util_functions.sh"
@@ -56,7 +53,6 @@ export MODULE_DIR LUOSHU_PUBLIC_DIR="$USER_ROOT"
 [ -f "$LEGACY_DIR/rom_adapters.sh" ] && . "$LEGACY_DIR/rom_adapters.sh"
 [ -f "$MODDIR/common/font_switch_lock.sh" ] && . "$MODDIR/common/font_switch_lock.sh"
 [ -f "$MODDIR/common/background_task.sh" ] && . "$MODDIR/common/background_task.sh"
-[ -f "$MODDIR/common/font_provenance.sh" ] && . "$MODDIR/common/font_provenance.sh"
 [ -f "$LEGACY_DIR/payload_clone.sh" ] && . "$LEGACY_DIR/payload_clone.sh"
 HYPEROS_COMPAT="$LEGACY_DIR/hyperos_full_coverage.sh"
 [ -f "$HYPEROS_COMPAT" ] && . "$HYPEROS_COMPAT"
@@ -95,61 +91,39 @@ safe_source_identity() {
     return 1
 }
 
-safe_inventory_identity() (
-    # Partition routing is part of the installed scan result, not just the JSON.
-    set --
-    for _sii_file in "$CONFIG_DIR/device_font_inventory.json" \
-                     "$CONFIG_DIR/device_font_partitions.conf" \
-                     "$CONFIG_DIR/device_font_roots.conf"; do
-        [ ! -f "$_sii_file" ] || set -- "$@" "$_sii_file"
-    done
-    if [ "$#" -eq 0 ]; then printf 'no-inventory\n'; return 0; fi
-    safe_checksum_files "$@"
-)
-
-safe_checksum_files() (
-    # One process for the complete small-file set; never hash the font payload.
-    # A read failure is a cache miss, not a successful fingerprint of partial data.
+safe_inventory_identity() {
+    _sii_file="$CONFIG_DIR/device_font_inventory.json"
+    [ -s "$_sii_file" ] || { printf 'no-inventory\n'; return 0; }
     if command -v cksum >/dev/null 2>&1; then
-        _scf_rows=$(cksum "$@" 2>/dev/null) || return 1
+        cksum "$_sii_file" 2>/dev/null | awk '{print $1 ":" $2}'
     elif command -v busybox >/dev/null 2>&1; then
-        _scf_rows=$(busybox cksum "$@" 2>/dev/null) || return 1
+        busybox cksum "$_sii_file" 2>/dev/null | awk '{print $1 ":" $2}'
     else
-        return 1
+        safe_source_identity "$_sii_file"
     fi
-    [ -n "$_scf_rows" ] || return 1
-    printf '%s\n' "$_scf_rows" | safe_hash_stream
-)
-
-safe_mapper_identity() (
-    # Include transitive helpers, not just the three shell entry points. A
-    # generator/metrics/coverage fix must invalidate previously aligned output.
-    # Globs cover shipped source only, not common/python's large runtime tree.
-    LC_ALL=C; export LC_ALL
-    set --
-    for _smi_file in "$MODDIR"/common/*.sh "$MODDIR"/common/*.py \
-                     "$LEGACY_DIR"/*.sh "$LEGACY_DIR"/*.py \
-                     "$MODDIR"/common/python/lib/python*/site-packages/fontTools/__init__.py; do
-        [ ! -f "$_smi_file" ] || set -- "$@" "$_smi_file"
-    done
-    [ "$#" -gt 0 ] || return 1
-    safe_checksum_files "$@"
-)
-
-safe_stage_begin() {
-    # Pin before generation. Never stamp output with a key recomputed only after
-    # the source, installed inventory or engine has changed under a worker.
-    SAFE_STAGE_ENGINE=$(safe_mapper_identity) || return 1
-    SAFE_STAGE_KEY=$(safe_switch_cache_key "$1" "$2") || return 1
-    [ -n "$SAFE_STAGE_KEY" ]
 }
 
-safe_stage_unchanged() {
-    [ -n "${SAFE_STAGE_KEY:-}" ] || return 1
-    _ssu_engine=$(safe_mapper_identity) || return 1
-    [ "$_ssu_engine" = "$SAFE_STAGE_ENGINE" ] || return 1
-    _ssu_key=$(safe_switch_cache_key "$1" "$2") || return 1
-    [ "$_ssu_key" = "$SAFE_STAGE_KEY" ]
+safe_mapper_identity() {
+    {
+        for _smi_file in "$LEGACY_DIR/rom_adapters.sh" \
+                         "$MODDIR/common/hyperos_stage_complete.sh" \
+                         "$MODDIR/common/coloros_stage_complete.sh" \
+                         "$MODDIR/common/hyperos_metrics_batch.py" \
+                         "$MODDIR/common/coloros_metrics_batch.py" \
+                         "$MODDIR/common/hyperos_physical_policy.py" \
+                         "$MODDIR/common/font_role_policy.py" \
+                         "$MODDIR/common/font_slot_weight.py" \
+                         "$MODDIR/common/font_slot_coverage.py"; do
+            [ -f "$_smi_file" ] || continue
+            if command -v cksum >/dev/null 2>&1; then
+                cksum "$_smi_file" 2>/dev/null | awk -v p="$_smi_file" '{print p "|" $1 "|" $2}'
+            elif command -v busybox >/dev/null 2>&1; then
+                busybox cksum "$_smi_file" 2>/dev/null | awk -v p="$_smi_file" '{print p "|" $1 "|" $2}'
+            else
+                printf '%s|%s\n' "$_smi_file" "$(safe_source_identity "$_smi_file" 2>/dev/null)"
+            fi
+        done
+    } | safe_hash_stream
 }
 
 safe_rom_identity() {
@@ -163,19 +137,26 @@ safe_rom_identity() {
 }
 
 safe_partition_list() {
-    luoshu_payload_partitions "$MODDIR"
+    _spl_base='system system_ext product vendor odm oem my_product my_engineering my_company my_preload my_region my_stock oplus_product oplus_engineering oplus_version oplus_region mi_ext cust hw_product'
+    printf '%s\n' "$_spl_base"
+    _spl_manifest="$CONFIG_DIR/device_font_partitions.conf"
+    [ -f "$_spl_manifest" ] || return 0
+    _spl_seen=" $_spl_base "
+    while IFS= read -r _spl_part; do
+        case "$_spl_part" in ''|*[!A-Za-z0-9_]*|[0-9]*|_*) continue ;; esac
+        case "$_spl_seen" in *" $_spl_part "*) continue ;; esac
+        printf '%s\n' "$_spl_part"
+        _spl_seen="$_spl_seen$_spl_part "
+    done < "$_spl_manifest"
 }
 
 safe_validation_key() {
     _svk_file="$1"
     _svk_identity=$(safe_source_identity "$_svk_file") || return 1
-    _svk_engine=${SAFE_STAGE_ENGINE:-$(safe_mapper_identity)}
-    [ -n "$_svk_engine" ] || return 1
     {
-        printf 'safe-validation-v2\n'
+        printf 'safe-validation-v1\n'
         printf '%s\n' "$_svk_file"
         printf '%s\n' "$_svk_identity"
-        printf '%s\n' "$_svk_engine"
     } | safe_hash_stream
 }
 
@@ -208,10 +189,9 @@ safe_validation_store() {
 safe_switch_cache_key() {
     _sck_file="$1"; _sck_font="$2"
     _sck_identity=$(safe_source_identity "$_sck_file") || return 1
-    _sck_inventory=$(safe_inventory_identity) || return 1
+    _sck_inventory=$(safe_inventory_identity)
     _sck_rom=$(safe_rom_identity)
-    _sck_mapper=${SAFE_STAGE_ENGINE:-$(safe_mapper_identity)}
-    [ -n "$_sck_mapper" ] || return 1
+    _sck_mapper=$(safe_mapper_identity)
     {
         printf '%s\n' "$SWITCH_CACHE_SCHEMA"
         printf '%s\n' "$_sck_font"
@@ -234,7 +214,7 @@ safe_switch_cache_restore() {
     [ "$(read_state_value "$_scr_conf" sourceIdentity)" = "$(safe_source_identity "$_scr_file")" ] || return 1
     [ "$(read_state_value "$_scr_conf" inventoryIdentity)" = "$(safe_inventory_identity)" ] || return 1
     [ "$(read_state_value "$_scr_conf" rom)" = "$(safe_rom_identity)" ] || return 1
-    [ "$(read_state_value "$_scr_conf" mapperIdentity)" = "${SAFE_STAGE_ENGINE:-$(safe_mapper_identity)}" ] || return 1
+    [ "$(read_state_value "$_scr_conf" mapperIdentity)" = "$(safe_mapper_identity)" ] || return 1
 
     _scr_restored=0
     for _scr_part in $(safe_partition_list); do
@@ -242,20 +222,14 @@ safe_switch_cache_restore() {
         [ -d "$_scr_src" ] || continue
         mkdir -p "$STAGE_PAYLOAD/$_scr_part" 2>/dev/null || return 1
         rm -rf "$STAGE_PAYLOAD/$_scr_part/fonts" 2>/dev/null || true
-        if ! cp -al "$_scr_src" "$STAGE_PAYLOAD/$_scr_part/fonts" 2>/dev/null; then
-            # cp can leave a partial destination behind. Remove it before the
-            # fallback, otherwise cp may create fonts/fonts and retain stale data.
-            rm -rf "$STAGE_PAYLOAD/$_scr_part/fonts" 2>/dev/null || return 1
-            cp -af "$_scr_src" "$STAGE_PAYLOAD/$_scr_part/fonts" 2>/dev/null || return 1
+        if cp -al "$_scr_src" "$STAGE_PAYLOAD/$_scr_part/fonts" 2>/dev/null ||            cp -af "$_scr_src" "$STAGE_PAYLOAD/$_scr_part/fonts" 2>/dev/null; then
+            _scr_restored=$((_scr_restored + 1))
+        else
+            return 1
         fi
-        _scr_restored=$((_scr_restored + 1))
     done
     [ "$_scr_restored" -gt 0 ] || return 1
-    for _scr_meta in .luoshu-metrics-report.json .luoshu-metrics-covered.lst \
-        .luoshu-coverage-remediation.conf .luoshu-coverage-preserved.tsv; do
-        [ ! -f "$_scr_root/tree/$_scr_meta" ] || \
-            cp -f "$_scr_root/tree/$_scr_meta" "$STAGE_PAYLOAD/$_scr_meta" 2>/dev/null || true
-    done
+    [ ! -f "$_scr_root/tree/.luoshu-metrics-report.json" ] ||         cp -f "$_scr_root/tree/.luoshu-metrics-report.json" "$STAGE_PAYLOAD/.luoshu-metrics-report.json" 2>/dev/null || true
     printf '[%s] [SAFE-SWITCH] cache hit font=%s key=%s partitions=%s\n'         "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)" "$_scr_font" "$_scr_key" "$_scr_restored"         >> "$LOG_FILE" 2>/dev/null || true
     return 0
 }
@@ -298,7 +272,6 @@ safe_switch_cache_prune() {
 
 safe_switch_cache_store() {
     _scs_file="$1"; _scs_font="$2"
-    safe_stage_unchanged "$_scs_file" "$_scs_font" || return 1
     _scs_key=$(safe_switch_cache_key "$_scs_file" "$_scs_font") || return 1
     _scs_root="$SWITCH_CACHE_ROOT/$_scs_key"
     _scs_stage="$SWITCH_CACHE_ROOT/.stage.$_scs_key.$$"
@@ -310,21 +283,14 @@ safe_switch_cache_store() {
         [ -d "$_scs_src" ] || continue
         find "$_scs_src" -type f -print -quit 2>/dev/null | grep -q . || continue
         mkdir -p "$_scs_stage/tree/$_scs_part" 2>/dev/null || { rm -rf "$_scs_stage"; return 1; }
-        if ! cp -al "$_scs_src" "$_scs_stage/tree/$_scs_part/fonts" 2>/dev/null; then
-            rm -rf "$_scs_stage/tree/$_scs_part/fonts" 2>/dev/null || { rm -rf "$_scs_stage"; return 1; }
-            cp -af "$_scs_src" "$_scs_stage/tree/$_scs_part/fonts" 2>/dev/null || {
+        cp -al "$_scs_src" "$_scs_stage/tree/$_scs_part/fonts" 2>/dev/null ||             cp -af "$_scs_src" "$_scs_stage/tree/$_scs_part/fonts" 2>/dev/null || {
                 rm -rf "$_scs_stage" 2>/dev/null || true
                 return 1
             }
-        fi
         _scs_saved=$((_scs_saved + 1))
     done
     [ "$_scs_saved" -gt 0 ] || { rm -rf "$_scs_stage" 2>/dev/null || true; return 1; }
-    for _scs_meta in .luoshu-metrics-report.json .luoshu-metrics-covered.lst \
-        .luoshu-coverage-remediation.conf .luoshu-coverage-preserved.tsv; do
-        [ ! -f "$STAGE_PAYLOAD/$_scs_meta" ] || \
-            cp -f "$STAGE_PAYLOAD/$_scs_meta" "$_scs_stage/tree/$_scs_meta" 2>/dev/null || true
-    done
+    [ ! -f "$STAGE_PAYLOAD/.luoshu-metrics-report.json" ] ||         cp -f "$STAGE_PAYLOAD/.luoshu-metrics-report.json" "$_scs_stage/tree/.luoshu-metrics-report.json" 2>/dev/null || true
     _scs_identity=$(safe_source_identity "$_scs_file") || { rm -rf "$_scs_stage"; return 1; }
     {
         printf 'schema=%s\n' "$SWITCH_CACHE_SCHEMA"
@@ -332,11 +298,10 @@ safe_switch_cache_store() {
         printf 'sourceIdentity=%s\n' "$_scs_identity"
         printf 'inventoryIdentity=%s\n' "$(safe_inventory_identity)"
         printf 'rom=%s\n' "$(safe_rom_identity)"
-        printf 'mapperIdentity=%s\n' "${SAFE_STAGE_ENGINE:-$(safe_mapper_identity)}"
+        printf 'mapperIdentity=%s\n' "$(safe_mapper_identity)"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
     } > "$_scs_stage/cache.conf" 2>/dev/null || { rm -rf "$_scs_stage"; return 1; }
     mkdir -p "$SWITCH_CACHE_ROOT" 2>/dev/null || { rm -rf "$_scs_stage"; return 1; }
-    safe_stage_unchanged "$_scs_file" "$_scs_font" || { rm -rf "$_scs_stage"; return 1; }
     rm -rf "$_scs_root" 2>/dev/null || true
     mv -f "$_scs_stage" "$_scs_root" 2>/dev/null || { rm -rf "$_scs_stage"; return 1; }
     safe_switch_cache_prune
@@ -372,31 +337,7 @@ lock_cleanup() {
     LOCK_HELD=false
 }
 
-prewarm_lock_cleanup() {
-    [ "$PREWARM_LOCK_HELD" = true ] || return 0
-    if type luoshu_font_lock_release >/dev/null 2>&1; then
-        luoshu_font_lock_release "$PREWARM_LOCK" "$$" >/dev/null 2>&1 || \
-            luoshu_font_lock_force_clear "$PREWARM_LOCK" "$$" >/dev/null 2>&1 || true
-    fi
-    PREWARM_LOCK_HELD=false
-}
 
-prewarm_lock_acquire() {
-    type luoshu_font_lock_acquire >/dev/null 2>&1 || return 1
-    luoshu_font_lock_acquire "$PREWARM_LOCK" "$$"
-    _pl_rc=$?
-    [ "$_pl_rc" -eq 0 ] || return "$_pl_rc"
-    PREWARM_LOCK_HELD=true
-    return 0
-}
-
-switch_busy() {
-    if type luoshu_font_lock_active >/dev/null 2>&1; then
-        luoshu_font_lock_active "$SWITCH_LOCK"
-        return $?
-    fi
-    [ -e "$SWITCH_LOCK" ]
-}
 
 safe_switch_cache_ready() {
     _scrd_file="$1"; _scrd_font="$2"
@@ -409,24 +350,13 @@ safe_switch_cache_ready() {
     [ "$(read_state_value "$_scrd_conf" sourceIdentity)" = "$(safe_source_identity "$_scrd_file")" ] || return 1
     [ "$(read_state_value "$_scrd_conf" inventoryIdentity)" = "$(safe_inventory_identity)" ] || return 1
     [ "$(read_state_value "$_scrd_conf" rom)" = "$(safe_rom_identity)" ] || return 1
-    [ "$(read_state_value "$_scrd_conf" mapperIdentity)" = "${SAFE_STAGE_ENGINE:-$(safe_mapper_identity)}" ] || return 1
+    [ "$(read_state_value "$_scrd_conf" mapperIdentity)" = "$(safe_mapper_identity)" ] || return 1
     find "$_scrd_root/tree" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.ttc' \) \
         -print -quit 2>/dev/null | grep -q .
 }
 
 wait_for_prewarm_cache() {
-    _wfpc_file="$1"; _wfpc_font="$2"
-    safe_switch_cache_ready "$_wfpc_file" "$_wfpc_font" && return 0
-    type luoshu_font_lock_active >/dev/null 2>&1 || return 1
-    luoshu_font_lock_active "$PREWARM_LOCK" >/dev/null 2>&1 || return 1
-    _wfpc_steps=0
-    while [ "$_wfpc_steps" -lt 16 ]; do
-        sleep 0.25 2>/dev/null || sleep 1
-        safe_switch_cache_ready "$_wfpc_file" "$_wfpc_font" && return 0
-        luoshu_font_lock_active "$PREWARM_LOCK" >/dev/null 2>&1 || break
-        _wfpc_steps=$((_wfpc_steps + 1))
-    done
-    return 1
+    safe_switch_cache_ready "$1" "$2"
 }
 
 lock_acquire() {
@@ -452,10 +382,10 @@ cleanup_stale_stages() {
     done
 }
 
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup' EXIT
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup; exit 129' HUP
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup; exit 130' INT
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup; exit 143' TERM
+trap 'cleanup_stage; lock_cleanup' EXIT
+trap 'cleanup_stage; lock_cleanup; exit 129' HUP
+trap 'cleanup_stage; lock_cleanup; exit 130' INT
+trap 'cleanup_stage; lock_cleanup; exit 143' TERM
 
 find_text_font_file() {
     _wanted="$1"
@@ -547,7 +477,9 @@ stage_clone_live() {
 }
 
 stage_clear_text_payload() {
-    rm -f "$STAGE_PAYLOAD/.luoshu-metrics-report.json" 2>/dev/null || return 1
+    # These sidecars describe one payload/inventory, not permanent device policy.
+    # A new build must not inherit exclusions from a previous font/OTA state.
+    rm -f "$STAGE_PAYLOAD/.luoshu-stock-preserved.paths"           "$STAGE_PAYLOAD/.luoshu-font-role-report.json"           "$STAGE_PAYLOAD/.luoshu-metrics-report.json" 2>/dev/null || return 1
     for _part in $(safe_partition_list); do
         rm -rf "$STAGE_PAYLOAD/$_part/fonts" 2>/dev/null || true
         _etc="$STAGE_PAYLOAD/$_part/etc"
@@ -606,6 +538,16 @@ stage_coloros_complete() {
     LUOSHU_REAL_MODDIR="$MODDIR" sh "$_stage_bridge" "$STAGE_PAYLOAD" >> "$LOG_FILE" 2>&1
 }
 
+stage_preserve_font_roles() {
+    _pyroot="$MODDIR/common/python"
+    _python="$_pyroot/bin/luoshu-python"
+    [ -x "$_python" ] || return 1
+    PYTHONHOME="$_pyroot" \
+    PYTHONPATH="$MODDIR/common:$_pyroot/lib/python3.14:$_pyroot/lib/python3.14/site-packages" \
+    LD_LIBRARY_PATH="$_pyroot/lib:$_pyroot/lib/python3.14/lib-dynload${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$_python" "$MODDIR/common/font_role_policy.py" "$MODDIR" "$STAGE_PAYLOAD" >> "$LOG_FILE" 2>&1
+}
+
 stage_verify() {
     _font="$1"
     [ "$_font" = default ] && return 0
@@ -633,37 +575,19 @@ resolve_previous_state() {
 }
 
 prepare_next_payload() {
-    _font="$1"; _previous="$2"; _previous_legacy="$3"; _source="${4:-}"
-    _next_tmp="${NEXT_STATE}.tmp.$"
-    _direct_proof=''
-    if [ "$_font" != default ] && [ "$_font" != mix ] && [ -f "$_source" ]; then
-        type luoshu_provenance_direct_proof >/dev/null 2>&1 || return 1
-        _direct_proof=$(luoshu_provenance_direct_proof "$_source" "$_font") || return 1
-        [ -n "$_direct_proof" ] || return 1
-    fi
+    _font="$1"; _previous="$2"; _previous_legacy="$3"
+    _next_tmp="${NEXT_STATE}.tmp.$$"
     rm -rf "$NEXT_PAYLOAD" 2>/dev/null || true
     rm -f "$NEXT_STATE" 2>/dev/null || true
     if ! mv "$STAGE_PAYLOAD" "$NEXT_PAYLOAD" 2>/dev/null; then
         return 1
     fi
-    STAGE_PAYLOAD="$MODDIR/.luoshu-payload-stage.committed.$"
+    STAGE_PAYLOAD="$MODDIR/.luoshu-payload-stage.committed.$$"
     {
         printf 'state=prepared\n'
         printf 'font=%s\n' "$_font"
         printf 'previousFont=%s\n' "$_previous"
         printf 'previousLegacy=%s\n' "$_previous_legacy"
-        # Composite generation already builds the complete next-boot tree through
-        # this safe switch. Stamp the originating mix request so the compatibility
-        # router can recognize this exact payload and must not rebuild/"补齐" it
-        # a second time during prepare-finalize.
-        if [ "$_font" = mix ] && [ -n "${LUOSHU_MIX_REQUEST_ID:-}" ]; then
-            printf 'requestId=%s\n' "$LUOSHU_MIX_REQUEST_ID"
-        fi
-        if [ -n "$_direct_proof" ]; then
-            printf 'provenanceSchema=font-provenance-v1\n'
-            printf 'proofKind=direct\n'
-            printf 'directProof=%s\n' "$_direct_proof"
-        fi
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
     } > "$_next_tmp" 2>/dev/null || {
         rm -rf "$NEXT_PAYLOAD" 2>/dev/null || true
@@ -708,85 +632,10 @@ write_runtime_state() {
     return 0
 }
 
-prewarm_start() {
-    _font="$1"
-    [ -n "$_font" ] && [ "$_font" != default ] || return 0
-    _source="$(find_text_font_file "$_font")"
-    [ -f "$_source" ] || return 0
-    type luoshu_start_detached >/dev/null 2>&1 || return 0
-    _prewarm_identity=$(safe_source_identity "$_source" 2>/dev/null)
-    [ -n "$_prewarm_identity" ] || return 0
-    _prewarm_key=$({
-        printf '%s\n' "$_font"
-        printf '%s\n' "$_prewarm_identity"
-    } | safe_hash_stream | cut -c1-12)
-    [ -n "$_prewarm_key" ] || return 0
-    _prewarm_pid="$CONFIG_DIR/font-prewarm-$_prewarm_key.pid"
-    _prewarm_log="$MODDIR/logs/font-prewarm.log"
-    _self="$MODDIR/common/legacy_v14_4/font_switch_safe.sh"
-    luoshu_start_detached "$_prewarm_pid" font_switch_safe.sh "$_prewarm_log" \
-        sh -c '
-            sleep 1
-            _script="$1"; _family="$2"; _public="$3"
-            [ -f "$_script" ] || exit 0
-            export LUOSHU_PUBLIC_DIR="$_public"
-            if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then
-                exec ionice -c 3 nice -n 19 sh "$_script" action prewarm "$_family"
-            elif command -v nice >/dev/null 2>&1; then
-                exec nice -n 19 sh "$_script" action prewarm "$_family"
-            fi
-            exec sh "$_script" action prewarm "$_family"
-        ' font_switch_safe.sh "$_self" "$_font" "$USER_ROOT" >/dev/null 2>&1 || true
-    return 0
-}
-
-prewarm_font() {
-    _font="$1"
-    [ -n "$_font" ] && [ "$_font" != default ] || return 0
-    [ -s "$CONFIG_DIR/device_font_inventory.json" ] || return 0
-    switch_busy && return 0
-
-    prewarm_lock_acquire
-    _prewarm_lock_rc=$?
-    [ "$_prewarm_lock_rc" -eq 0 ] || return 0
-    switch_busy && return 0
-
-    _source="$(find_text_font_file "$_font")"
-    [ -f "$_source" ] || return 0
-    safe_stage_begin "$_source" "$_font" || return 0
-    validate_global "$_source" || return 0
-    safe_switch_cache_ready "$_source" "$_font" && return 0
-
-    stage_clone_live || return 0
-    stage_clear_text_payload || return 0
-    switch_busy && return 0
-
-    PAYLOAD_ROOT="$STAGE_PAYLOAD"
-    SYSTEM_FONTS_DIR="$STAGE_PAYLOAD/system/fonts"
-    export PAYLOAD_ROOT SYSTEM_FONTS_DIR
-    type apply_font_by_rom >/dev/null 2>&1 || return 0
-    apply_font_by_rom "$_source" "$SYSTEM_FONTS_DIR" quick "$_font" >> "$LOG_FILE" 2>&1 || return 0
-    mirror_existing_targets
-    switch_busy && return 0
-
-    if [ "${IS_HYPEROS:-false}" = true ]; then
-        stage_hyperos_complete || return 0
-    elif [ "${IS_COLOROS:-false}" = true ]; then
-        stage_coloros_complete || return 0
-    fi
-    # Build optional inventory coverage while the low-priority prewarm worker is
-    # already off the UI path. The resulting tree is cached as one unit, so the
-    # foreground switch only restores hard links instead of repeating fontTools.
-    if [ -f "$COVERAGE_REMEDIATE_HELPER" ] && [ -s "$CONFIG_DIR/device_font_inventory.json" ]; then
-        LUOSHU_REAL_MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="$USER_ROOT" LUOSHU_COVERAGE_PLAN= \
-            sh "$COVERAGE_REMEDIATE_HELPER" "$STAGE_PAYLOAD" direct "$_font" >> "$LOG_FILE" 2>&1 || true
-    fi
-    stage_verify "$_font" || return 0
-    safe_switch_cache_store "$_source" "$_font" >/dev/null 2>&1 || return 0
-    printf '[%s] [SAFE-SWITCH] prewarm ready font=%s\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)" "$_font" >> "$LOG_FILE" 2>/dev/null || true
-    return 0
-}
+# Compatibility endpoints for the 1.1.1 App. Importing/opening a font must not
+# launch a detached FontTools job. Cache entries are built by an explicit switch.
+prewarm_start() { return 0; }
+prewarm_font() { return 0; }
 
 switch_font() {
     _font="$1"
@@ -799,15 +648,11 @@ switch_font() {
         progress 6 '正在查找并校验字体文件'
         _source="$(find_text_font_file "$_font")"
         [ -f "$_source" ] || { safe_error "字体 $_font 不存在"; return 1; }
-        safe_stage_begin "$_source" "$_font" || {
-            safe_error '无法核验本机字体清单或生成引擎，请重新检测后应用'
-            return 1
-        }
         if ! validate_global "$_source"; then
             safe_error "${FONT_CHECK_ERROR:-字体校验失败}"
             return 1
         fi
-        progress 14 '正在检查本机字体预热缓存'
+        progress 14 '正在检查本机已生成的字体缓存'
         wait_for_prewarm_cache "$_source" "$_font" >/dev/null 2>&1 || true
     fi
 
@@ -825,13 +670,9 @@ switch_font() {
         PAYLOAD_ROOT="$STAGE_PAYLOAD"
         SYSTEM_FONTS_DIR="$STAGE_PAYLOAD/system/fonts"
         export PAYLOAD_ROOT SYSTEM_FONTS_DIR
-        _cache_restored=false
-        if [ "${LUOSHU_COVERAGE_REMEDIATE:-0}" != 1 ] && safe_switch_cache_restore "$_source" "$_font"; then
-            _cache_restored=true
+        if safe_switch_cache_restore "$_source" "$_font"; then
             progress 80 '已复用本机字体对齐缓存'
         else
-            # A failed restore may already have populated several partitions.
-            stage_clear_text_payload || { safe_error '无法清理未完成的缓存恢复'; return 1; }
             progress 48 '正在生成 ROM 核心字体映射'
             type apply_font_by_rom >/dev/null 2>&1 || { safe_error '缺少 ROM 字体映射器'; return 1; }
             if ! apply_font_by_rom "$_source" "$SYSTEM_FONTS_DIR" quick "$_font" >> "$LOG_FILE" 2>&1; then
@@ -853,45 +694,16 @@ switch_font() {
                     return 1
                 }
             fi
-        fi
-        # Explicit repair remains transactional. Normal switches reuse the complete
-        # prewarmed/cache tree when available; only a cache miss performs the fast
-        # best-effort inventory pass.
-        if [ "${LUOSHU_COVERAGE_REMEDIATE:-0}" = 1 ]; then
-            progress 82 '正在按补齐计划重建本机安全字体槽位'
-            if [ ! -f "$COVERAGE_REMEDIATE_HELPER" ] || [ ! -s "$CONFIG_DIR/device_font_inventory.json" ]; then
-                safe_error '字体覆盖补齐组件或本机扫描清单缺失，当前启动字体未被改动'
-                return 1
-            fi
-            if ! LUOSHU_REAL_MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="$USER_ROOT" \
-                sh "$COVERAGE_REMEDIATE_HELPER" "$STAGE_PAYLOAD" direct "$_font" >> "$LOG_FILE" 2>&1; then
-                safe_error '按补齐计划重建字体槽位失败，当前启动字体未被改动'
-                return 1
-            fi
-        elif [ "$_cache_restored" = true ]; then
-            progress 82 '已复用完整本机字体槽位缓存'
-        elif [ -f "$COVERAGE_REMEDIATE_HELPER" ] && [ -s "$CONFIG_DIR/device_font_inventory.json" ]; then
-            progress 82 '正在按本机扫描清单映射全部可替换字体槽位'
-            LUOSHU_REAL_MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="$USER_ROOT" LUOSHU_COVERAGE_PLAN= \
-                sh "$COVERAGE_REMEDIATE_HELPER" "$STAGE_PAYLOAD" direct "$_font" >> "$LOG_FILE" 2>&1 || {
-                    printf '[%s] [SAFE-SWITCH] inventory slot mapping had optional failures; keep verified ROM core mapping\n' \
-                        "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)" >> "$LOG_FILE" 2>/dev/null || true
-                }
-        fi
-        progress 86 '正在校验下一启动字体负载'
-        stage_verify "$_font" || { safe_error '新字体负载校验失败，当前启动字体未被改动'; return 1; }
-        if [ "$_cache_restored" != true ]; then
-            progress 90 '正在保存已校验的本机字体对齐缓存'
+            progress 82 '正在保存本机字体对齐缓存'
             safe_switch_cache_store "$_source" "$_font" >/dev/null 2>&1 || true
         fi
+        progress 86 '正在校验下一启动字体负载'
+        stage_preserve_font_roles || { safe_error '等宽字体保护校验失败，当前启动字体未改动'; return 1; }
+        stage_verify "$_font" || { safe_error '新字体负载校验失败，当前启动字体未被改动'; return 1; }
     fi
 
-    if [ "$_font" != default ] && ! safe_stage_unchanged "$_source" "$_font"; then
-        safe_error '字体源、本机扫描清单或生成引擎在处理中发生变化，请重新应用'
-        return 1
-    fi
     progress 94 '正在提交下一启动字体负载'
-    prepare_next_payload "$_active_label" "$PREVIOUS_FONT" "$PREVIOUS_LEGACY" "$_source" || {
+    prepare_next_payload "$_active_label" "$PREVIOUS_FONT" "$PREVIOUS_LEGACY" || {
         safe_error '下一启动字体负载提交失败，当前启动字体未被改动'
         return 1
     }

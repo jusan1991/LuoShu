@@ -104,7 +104,7 @@ _luoshu_font_config_alias_partition() {
     _lfc_target="$1"
     _lfc_system_fonts="$(_luoshu_font_config_payload_root)/system/fonts"
     mkdir -p "$_lfc_target" 2>/dev/null || return 1
-    for _lfc_prefix in LuoShu LuoShuMono; do
+    for _lfc_prefix in LuoShu; do
         for _lfc_weight in 100 200 300 400 500 600 700 800 900; do
             _lfc_source="$_lfc_system_fonts/${_lfc_prefix}-${_lfc_weight}.ttf"
             _lfc_dest="$_lfc_target/${_lfc_prefix}-${_lfc_weight}.ttf"
@@ -248,7 +248,7 @@ _luoshu_font_config_generate_base() {
 
     # Weight availability is a global invariant. Never publish XML that references a half-built
     # family merely because one partition happens to be writable.
-    for _lfc_prefix in LuoShu LuoShuMono; do
+    for _lfc_prefix in LuoShu; do
         for _lfc_weight in 100 200 300 400 500 600 700 800 900; do
             [ -s "$_lfc_payload/system/fonts/${_lfc_prefix}-${_lfc_weight}.ttf" ] || {
                 _luoshu_font_config_disable_base

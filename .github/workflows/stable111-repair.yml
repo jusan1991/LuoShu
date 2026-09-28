@@ -1,0 +1,31 @@
+name: Stable 1.1.1 repair verification
+on:
+  push:
+    branches: [fix/111-clean-exit-20260928]
+permissions:
+  contents: read
+concurrency:
+  group: stable111-repair-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export immutable baseline and current sources
+        run: |
+          mkdir -p verification
+          git archive --format=zip be39f598bfb921526851c5c4a2e92905dacf4ea7 > verification/LuoShu-1.1.1-source.zip
+          git archive --format=zip HEAD > verification/LuoShu-repair-source.zip
+          git rev-parse HEAD > verification/commit.txt
+          curl --fail --location --retry 2 --max-time 120 https://github.com/xgl34222220-ops/LuoShu/releases/download/refactor-v1.1.1/LuoShu-v1.1.1.zip -o verification/LuoShu-v1.1.1.zip
+          echo 'c5c8fa86af4ac196107ba05c5ee8cc1944140ae033cc9e763cec8c76f40c848a  verification/LuoShu-v1.1.1.zip' | sha256sum -c -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable111-repair-verification
+          path: verification/
+          retention-days: 14

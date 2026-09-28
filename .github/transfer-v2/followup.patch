@@ -1,55 +1,12 @@
 diff --git a/scripts/font_switch_performance_test.sh b/scripts/font_switch_performance_test.sh
 --- a/scripts/font_switch_performance_test.sh
 +++ b/scripts/font_switch_performance_test.sh
-@@ -40,7 +40,9 @@
- grep -q 'prewarm) prewarm_font' "$ROOT/common/legacy_v14_4/font_switch_safe.sh"
- grep -q 'schedule_font_prewarm' "$ROOT/common/native_import.sh"
+@@ -42,7 +42,7 @@
  grep -q 'prewarm-start' "$ROOT/common/app_bridge.sh"
--grep -q 'ionice -c 3 nice -n 19' "$ROOT/common/legacy_v14_4/font_switch_safe.sh"
-+# Legacy App endpoints are inert: keep on-demand cache reuse, not background work.
-+grep -qx 'prewarm_start() { return 0; }' "$ROOT/common/legacy_v14_4/font_switch_safe.sh"
+ # Legacy App endpoints are inert: keep on-demand cache reuse, not background work.
+ grep -qx 'prewarm_start() { return 0; }' "$ROOT/common/legacy_v14_4/font_switch_safe.sh"
+-grep -qx 'prewarm_font() { return 0; }' "$ROOT/common/legacy_v14_4/font_switch_safe.sh
 +grep -qx 'prewarm_font() { return 0; }' "$ROOT/common/legacy_v14_4/font_switch_safe.sh"
  grep -q 'fun prewarmFont' "$ROOT/android-app/app/src/main/java/io/github/xgl34222220/luoshu/LuoShuViewModel.kt"
  grep -q 'viewModel.prewarmFont(it.id)' "$ROOT/android-app/app/src/main/java/io/github/xgl34222220/luoshu/LuoShuAppShell.kt"
  grep -q 'stat -c %s' "$ROOT/common/legacy_v14_4/font_check.sh"
-diff --git a/scripts/switch_provider_regression_test.py b/scripts/switch_provider_regression_test.py
---- a/scripts/switch_provider_regression_test.py
-+++ b/scripts/switch_provider_regression_test.py
-@@ -86,9 +86,7 @@
-         self.assertFalse(lock.exists())
-         marker.unlink()
-         (self.module / 'config/active_font.conf').write_text('default\n')
--        # Default now pauses rather than permanently exiting the boot guard.
--        # Bound this lock/no-replacement fixture explicitly; the resume suite
--        # exercises default -> custom and cancellation of the live watcher.
-+        # Default restores and exits; later selections require a new explicit pass.
-         subprocess.run(['sh', str(service)], env={**self.env,
-             'TEST_APPLIED': str(marker), 'LUOSHU_GOOGLE_FONT_RETRIES': '1',
-             'LUOSHU_GOOGLE_FONT_WATCH_CYCLES': '0'}, check=True, timeout=5)
-@@ -165,6 +163,8 @@
-                 self.assertEqual((source / 'system/fonts/.luoshu-font-store/old.font').read_bytes(), original)
- 
-     def test_real_switch_router_commits_only_successful_stages(self):
-+        install_task_scope(self.module)
-+        shutil.copyfile(ROOT / 'common/font_role_policy.py', self.module / 'common/font_role_policy.py')
-         legacy = self.module / 'common/legacy_v14_4'
-         legacy.mkdir()
-         for name in ('font_switch_safe.sh', 'payload_clone.sh'):
-@@ -205,14 +205,13 @@
-         self.assertEqual(old.read_bytes(), before)
-         self.assertFalse((self.module / '.luoshu-payload-next').exists())
-         cache_confs = list((self.module / 'config/safe-switch-cache').glob('*/cache.conf'))
--        self.assertTrue(cache_confs)
--        cache_root = cache_confs[0].parent
--        self.assertFalse((cache_root / 'tree/future_oem/fonts/OldDynamic.ttf').exists(),
--                         'discovered OEM partitions must not retain stale font payloads')
-+        self.assertFalse(cache_confs, 'retired background prewarm must not generate caches')
-         success = subprocess.run(command, env=env, capture_output=True, text=True, timeout=5)
-         self.assertEqual(success.returncode, 0, success.stdout + success.stderr)
-         self.assertIn('"status":"ok"', success.stdout)
-         pending = self.module / '.luoshu-payload-next'
-+        self.assertFalse((pending / 'future_oem/fonts/OldDynamic.ttf').exists(),
-+                         'explicit switch must discard stale discovered partition payloads')
-         self.assertEqual((pending / 'system/fonts/Roboto-Regular.ttf').read_bytes(),
-                          (public / 'fonts/Selected.ttf').read_bytes())
-         self.assertEqual(old.read_bytes(), before)

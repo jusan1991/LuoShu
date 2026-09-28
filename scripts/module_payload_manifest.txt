@@ -4,6 +4,8 @@
 common/app_bridge.sh
 common/app_installer.sh
 common/background_task.sh
+common/task_scope.sh
+common/task_scope.py
 common/coloros_global.sh
 common/coloros_metrics_batch.py
 common/coloros_stage_complete.sh
@@ -135,3 +137,7 @@ uninstall.sh
 action.sh
 boot-completed.sh
 magic
+common/font_role_policy.py
+common/font_slot_weight.py
+common/font_weight_retire.sh
+common/install_ui.sh

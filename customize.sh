@@ -28,6 +28,8 @@ if [ ! -f "$_lc_base" ]; then
     return 1 2>/dev/null || exit 1
 fi
 
+[ ! -f "$MODPATH/common/install_ui.sh" ] || . "$MODPATH/common/install_ui.sh"
+
 # A legacy physical payload is not an obsolete font cache: it is the exact source
 # tree that the current boot is using. Older 4.0 builds did not give that payload a
 # schema understood by the delegated installer, so an update could classify it as
@@ -112,10 +114,12 @@ if [ "${LUOSHU_UPDATE_REBUILD_REQUIRED:-false}" = true ]; then
     ui_print '• 本次刷写不会同步重建字体；重启后可在洛书中重新应用以升级引擎'
 fi
 
+type luoshu_install_step >/dev/null 2>&1 && luoshu_install_step 4 "部署字体挂载"
 if ! luoshu_private_install_migrate "$MODPATH"; then
     abort '洛书私有挂载树部署失败'
     return 1 2>/dev/null || exit 1
 fi
 ui_print '✓ 私有字体负载已部署'
 ui_print '✓ 洛书将独立完成字体挂载'
+type luoshu_install_complete >/dev/null 2>&1 && luoshu_install_complete
 return 0 2>/dev/null || exit 0

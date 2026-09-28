@@ -325,3 +325,6 @@ grep -q 'native-v3' common/font_manager.sh
 grep -q 'manifest-fast' common/font_manager.sh
 grep -q 'font-index-v3.json' android-app/app/src/main/java/io/github/xgl34222220/luoshu/FontIndexStore.kt
 grep -q 'prepared-v8' common/multiweight_mix_task.sh
+
+# Stable 1.1.1 one-shot regressions and v2 settings retirement (synthetic fixtures).
+PYTHONPATH="$ROOT/common:$ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 -m unittest -q stable111_repair_test stable111_round2_test release_v2_retirement_test

@@ -1,8 +1,14 @@
 #!/system/bin/sh
-# Apply during startup, then maintain lazily downloaded fonts for this boot.
+# Apply currently available provider/theme fonts once, then exit.
 set +e
 
 MODDIR="${MODDIR:-${MODULE_DIR:-/data/adb/modules/LuoShu}}"
+# One bounded boot task, never an all-day observer. The wrapper supervises
+# descendants even when a bridge double-forks or starts a separate session.
+if [ "${LUOSHU_SCOPE_WORKER_PID:-}" != "$$" ]; then
+    export MODDIR
+    exec sh "$MODDIR/common/task_scope.sh" --timeout 180 -- sh "$0" "$@"
+fi
 BRIDGE="$MODDIR/common/google_font_provider_bridge.sh"
 THEME_BRIDGE="$MODDIR/common/hyperos_theme_font_bridge.sh"
 LOCK="$MODDIR/.google-font-provider.lock"
@@ -37,8 +43,7 @@ provider_run() {
     return "$_provider_apply_rc"
 }
 
-# A system-font selection pauses the guard; it must not permanently terminate
-# the only boot-started watcher. A later font apply may happen in the same boot.
+# A default selection restores owned mounts and ends this one-shot task.
 _provider_default_clean=0
 provider_selection_ready() {
     _active=$(head -n1 "$MODDIR/config/active_font.conf" 2>/dev/null | tr -d '\r\n')
@@ -64,42 +69,6 @@ provider_pause() {
     _provider_child=$!
     wait "$_provider_child"
     _provider_child=
-}
-
-# A bounded stdlib-only observer replaces blind sleeps when available. It
-# observes directories and process identities, never opens font files or loads
-# FontTools. The existing periodic fingerprint remains the correctness backstop.
-provider_watch_pause() {
-    _provider_event=0
-    _provider_wait_elapsed="$1"
-    _provider_wait_py="$MODDIR/common/python/bin/luoshu-python"
-    _provider_wait_helper="$MODDIR/common/google_font_watch_wait.py"
-    if [ "${LUOSHU_GOOGLE_FONT_EVENT_WATCH:-1}" = 1 ] && [ -x "$_provider_wait_py" ] && [ -f "$_provider_wait_helper" ]; then
-        _provider_wait_home="$MODDIR/common/python"
-        _provider_wait_started=$(date +%s 2>/dev/null)
-        PYTHONHOME="$_provider_wait_home" \
-        PYTHONPATH="$_provider_wait_home/lib/python3.14:$_provider_wait_home/lib/python3.14/site-packages" \
-        LD_LIBRARY_PATH="$_provider_wait_home/lib:$_provider_wait_home/lib/python3.14/lib-dynload${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            "$_provider_wait_py" "$_provider_wait_helper" "$MODDIR" "$1" >/dev/null 2>&1 &
-        _provider_child=$!
-        wait "$_provider_child"
-        _provider_wait_rc=$?
-        _provider_child=
-        case "$_provider_wait_rc" in
-            0)
-                _provider_event=1
-                _provider_wait_finished=$(date +%s 2>/dev/null)
-                case "$_provider_wait_started:$_provider_wait_finished" in
-                    *[!0-9:]*|:*|*:) _provider_wait_elapsed=0 ;;
-                    *) _provider_wait_elapsed=$((_provider_wait_finished - _provider_wait_started)) ;;
-                esac
-                [ "$_provider_wait_elapsed" -ge 0 ] || _provider_wait_elapsed=0
-                return 0 ;;
-            2) return 0 ;;
-        esac
-        # No tight retry loop when the observer/runtime is unavailable.
-    fi
-    provider_pause "$1"
 }
 
 provider_apply() {
@@ -177,97 +146,22 @@ while [ "$(getprop sys.boot_completed 2>/dev/null)" != 1 ] && [ "$_waited" -lt 6
 done
 [ "$(getprop sys.boot_completed 2>/dev/null)" = 1 ] || exit 0
 
-_attempt=1
-_limit="${LUOSHU_GOOGLE_FONT_RETRIES:-24}"
-case "$_limit" in ''|*[!0-9]*) _limit=24 ;; esac
-[ "$_limit" -ge 1 ] 2>/dev/null || _limit=1
-_fingerprint=
-_boot_retry_age=0
-
-while [ "$_attempt" -le "$_limit" ]; do
-    [ -d "$MODDIR" ] && [ ! -f "$MODDIR/disable" ] && [ ! -f "$MODDIR/remove" ] || { provider_restore_theme; exit $?; }
-    provider_selection_ready
-    case "$?" in
-        1) exit 1 ;;
-        2)
-            [ "$_attempt" -lt "$_limit" ] || break
-            provider_pause 5
-            _attempt=$((_attempt + 1))
-            continue
-            ;;
-    esac
-    # Continue discovery throughout boot, but only generate/inspect fonts when
-    # metadata changes. The former 24 unconditional applies repeatedly launched
-    # Python and hashed large composite fonts even on a completely idle phone.
-    _observed=$(provider_fingerprint)
-    _repair=0
-    [ -n "$_observed" ] && [ "$_observed" = "$_fingerprint" ] || _repair=1
-    case "${_rc:-2}" in
-        0|2) ;;
-        *) [ "$_boot_retry_age" -lt 30 ] || _repair=1 ;;
-    esac
-    if [ "$_repair" = 1 ]; then
-        provider_apply "${LUOSHU_GOOGLE_FONT_ALLOW_RESTART:-1}"
-        _rc=$?
-        _boot_retry_age=0
-        # Keep the PRE-apply view, including at the handoff to the long-lived
-        # watch. Downloads arriving during apply must remain visible changes.
-        _fingerprint=$_observed
-    fi
-    [ ! -s "$MODDIR/config/google-font-refresh-pending.conf" ] || provider_run "$BRIDGE" refresh 0
-    # GMS downloads families lazily. One mounted family must not end the boot
-    # discovery window before Play opens or another font weight arrives. Binds
-    # are idempotent; old consumer FDs use only the deferred background queue.
-    [ "$_attempt" -lt "$_limit" ] || break
-    provider_pause 5
-    _boot_retry_age=$((_boot_retry_age + 5))
-    _attempt=$((_attempt + 1))
-done
-
-# GMS can download another family/weight hours later, or restart into a new
-# namespace. The old service stopped permanently after its two-minute window.
-# Wait for font-cache/selection changes and new Google process identities, with
-# a 30-second full metadata audit. The observer imports no FontTools; unchanged
-# state never clones fonts, mounts files or restarts apps.
-_interval="${LUOSHU_GOOGLE_FONT_WATCH_INTERVAL:-30}"
-case "$_interval" in ''|*[!0-9]*) _interval=30 ;; esac
-[ "$_interval" -ge 15 ] 2>/dev/null || _interval=15
-_watch_limit="${LUOSHU_GOOGLE_FONT_WATCH_CYCLES:--1}"
-case "$_watch_limit" in -1) ;; ''|*[!0-9]*) _watch_limit=-1 ;; esac
-[ "$_watch_limit" != 0 ] || exit 0
-_watch_count=0
-_retry_age=0
-_fingerprint="${_fingerprint:-}"
-while [ "$_watch_limit" = -1 ] || [ "$_watch_count" -lt "$_watch_limit" ]; do
-    provider_watch_pause "$_interval"
-    _watch_count=$((_watch_count + 1))
-    [ -d "$MODDIR" ] && [ ! -f "$MODDIR/disable" ] && [ ! -f "$MODDIR/remove" ] || { provider_restore_theme; exit $?; }
-    provider_selection_ready
-    case "$?" in
-        1) exit 1 ;;
-        2) continue ;;
-    esac
-    _observed=$(provider_fingerprint)
-    # A full sleep keeps the existing backoff; an early event contributes only
-    # its actual elapsed time rather than pretending 30 seconds have passed.
-    _retry_age=$((_retry_age + _provider_wait_elapsed))
-    _repair=0
-    [ -n "$_observed" ] && [ "$_observed" = "$_fingerprint" ] || _repair=1
-    # A stable but partially failed mount gets another chance every five minutes;
-    # no-target (2) is normal and will be revisited when a download appears.
-    case "${_rc:-2}" in
-        0|2) ;;
-        *) [ "$_retry_age" -lt 300 ] || _repair=1 ;;
-    esac
-    if [ "$_repair" = 1 ]; then
-        provider_apply 0
-        _rc=$?
-        _retry_age=0
-        # Retain the PRE-apply view. A post-apply snapshot could include a new
-        # download/process that apply never handled, hiding it permanently.
-        # Our own binds may cause one extra idempotent pass, then settle.
-        _fingerprint="$_observed"
-    fi
-    [ ! -s "$MODDIR/config/google-font-refresh-pending.conf" ] || provider_run "$BRIDGE" refresh 0
-done
+# There is no discovery timer in 2.0.0. Existing static mounts do not require
+# an observer process; newly downloaded fonts wait for an explicit operation.
+[ -d "$MODDIR" ] && [ ! -f "$MODDIR/disable" ] && [ ! -f "$MODDIR/remove" ] || { provider_restore_theme; exit $?; }
+provider_selection_ready
+case "$?" in 1) exit 1 ;; 2) exit 0 ;; esac
+provider_apply 0
+_rc=$?
+case "$_rc" in
+    0|2) ;;
+    *)
+        mkdir -p "${LOG%/*}" 2>/dev/null || true
+        printf '[%s] one-shot font apply failed; no automatic rebuild loop\n' "$(date '+%F %T' 2>/dev/null)" >> "$LOG"
+        exit 1
+        ;;
+esac
+if [ -s "$MODDIR/config/google-font-refresh-pending.conf" ]; then
+    provider_run "$BRIDGE" refresh 0 || exit 1
+fi
 exit 0

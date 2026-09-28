@@ -43,6 +43,13 @@ luoshu_task_pid_alive() {
 luoshu_clear_task_pid() {
     _lctp_pid_file="$1"
     _lctp_task="${2:-}"
+    # The one-shot supervisor owns these sidecars until all descendants have
+    # exited. A worker must not erase ownership while its children still run.
+    if [ "${LUOSHU_TASK_SCOPE_PID_FILE:-}" = "$_lctp_pid_file" ] && \
+       [ -n "${LUOSHU_TASK_SCOPE_PID:-}" ] && \
+       { [ -z "$_lctp_task" ] || [ "${LUOSHU_TASK_SCOPE_TASK:-}" = "$_lctp_task" ]; }; then
+        return 0
+    fi
     if [ -n "$_lctp_task" ] && [ -s "${_lctp_pid_file}.task" ] && [ "$(cat "${_lctp_pid_file}.task" 2>/dev/null)" != "$_lctp_task" ]; then
         return 0
     fi
@@ -118,6 +125,17 @@ luoshu_start_detached() {
     # names here: the old generic _task variable was cleared by luoshu_clear_task_pid(), so
     # every new worker wrote an empty .task sidecar and was falsely recovered as interrupted.
     luoshu_clear_task_pid "$_lsd_pid_file"
+
+    _lsd_scope="${MODDIR:-}/common/task_scope.sh"
+    if [ -f "$_lsd_scope" ]; then
+        [ -x "$MODDIR/common/python/bin/luoshu-python" ] || return 1
+        _lsd_timeout="${LUOSHU_TASK_TIMEOUT_SECONDS:-900}"
+        case "$_lsd_timeout" in ''|*[!0-9]*) _lsd_timeout=900 ;; esac
+        [ "$_lsd_timeout" -ge 30 ] 2>/dev/null || _lsd_timeout=30
+        [ "$_lsd_timeout" -le 900 ] 2>/dev/null || _lsd_timeout=900
+        set -- sh "$_lsd_scope" --pid-file "$_lsd_pid_file" --task "$_lsd_task" \
+            --timeout "$_lsd_timeout" -- "$@"
+    fi
 
     if command -v nohup >/dev/null 2>&1 && command -v setsid >/dev/null 2>&1; then
         MODDIR="${MODDIR:-}" nohup setsid "$@" </dev/null >>"$_lsd_log_file" 2>&1 &

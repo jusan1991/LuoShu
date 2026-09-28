@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import font_inventory as base
-from hyperos_physical_policy import (PARTITIONS as HYPEROS_PARTITIONS, safe_physical_font_name,
+from hyperos_physical_policy import (PARTITIONS as HYPEROS_PARTITIONS, stock_physical_font_name,
                                     DYNAMIC_OVERLAY_PATH, DYNAMIC_OVERLAY_TARGET)
 
 SCANNER_REVISION = 4
@@ -574,7 +574,7 @@ def _add_hyperos_physical_slots(slots: dict[str, dict[str, Any]], roots: list[ba
         if root.partition not in HYPEROS_PARTITIONS or not root.actual.is_dir():
             continue
         for actual in sorted(root.actual.iterdir(), key=lambda item: item.name.lower()):
-            if not safe_physical_font_name(actual.name):
+            if not stock_physical_font_name(actual.name):
                 continue
             logical = base._logical_path(root, actual)
             if (logical == DYNAMIC_OVERLAY_PATH and actual.is_symlink()
@@ -837,7 +837,7 @@ def _scan_current_roots(args: Any, build_key: str, fingerprint: str, display_id:
     retired_physical_slots = {
         path for path, entry in (existing or {}).get("slots", {}).items()
         if hyperos and entry.get("source") == "hyperos-physical"
-        and path not in slots and not safe_physical_font_name(Path(path).name)
+        and path not in slots and not stock_physical_font_name(Path(path).name)
     }
     preserved_paths = set(dynamic_aliases) | retired_physical_slots
     retired_absent_upgrade_slots: set[str] = set()

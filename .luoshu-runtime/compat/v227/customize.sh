@@ -21,14 +21,13 @@ fi
 type check_coloros >/dev/null 2>&1 && check_coloros
 type check_hyperos >/dev/null 2>&1 && check_hyperos
 
-ui_print ""
-ui_print "╔══════════════════════════════════╗"
-ui_print "║  洛书 $MODULE_VERSION"
-ui_print "║  Android 全局字体管理"
-ui_print "╚══════════════════════════════════╝"
-ui_print "• 用于管理和应用 Android 全局文字字体"
-ui_print "• 支持单字体、多字重以及中英数字复合字体"
-ui_print "• Emoji、图标、衬线与斜体保持系统原样"
+[ ! -f "$MODPATH/common/install_ui.sh" ] || . "$MODPATH/common/install_ui.sh"
+if type luoshu_install_header >/dev/null 2>&1; then
+    luoshu_install_header "$MODULE_VERSION"
+    luoshu_install_step 1 "检查环境与迁移配置"
+else
+    ui_print "洛书 $MODULE_VERSION"
+fi
 if [ "${IS_COLOROS:-false}" = true ]; then
     ui_print "✓ 系统：ColorOS ${COLOROS_VERSION:-未知}"
 elif [ "${IS_HYPEROS:-false}" = true ]; then
@@ -110,6 +109,14 @@ if [ "$UPDATE_PRESERVED" != true ]; then
     printf 'default\n' > "$MODPATH/config/active_font.conf"
 fi
 
+if [ -f "$MODPATH/common/font_weight_retire.sh" ]; then
+    if sh "$MODPATH/common/font_weight_retire.sh" "$OLD_MOD" "$MODPATH" flash; then
+        ui_print '✓ 已移除全局粗细设置，保留字体自身字重'
+    else
+        ui_print '• 旧版粗细设置将在首次开机时恢复，不启动常驻任务'
+    fi
+fi
+type luoshu_install_step >/dev/null 2>&1 && luoshu_install_step 2 "扫描原厂字体"
 # 必须在新模块覆盖挂载系统字体之前读取原厂槽位。v2 扫描器会分别统计全部原厂
 # 字体文件和可替换 UI 槽位，并读取 system、system_ext、product、my_product、vendor
 # 各分区的 fonts*.xml。相同系统指纹复用；旧扫描器生成的清单会自动升级重扫。
@@ -161,7 +168,7 @@ if [ -f "$FONT_INVENTORY_SCRIPT" ] && [ -x "$FONT_INVENTORY_PYTHON" ]; then
         [ -n "$_inventory_rom" ] || _inventory_rom="generic"
         ui_print "✓ 安装阶段已记录本机字体候选：$_inventory_candidates 个"
         ui_print "✓ 原厂字体文件：$_inventory_files 个（ROM：$_inventory_rom）"
-        ui_print "✓ 最终可替换 UI 槽位：$_inventory_slots 个（XML $_inventory_xml / 通用探测 $_inventory_generic / OEM 规则 $_inventory_heuristic / 物理补充 $_inventory_physical）"
+        ui_print "✓ 可替换 UI 槽位：$_inventory_slots 个（不是本次刷写数量）"
         [ "$_inventory_dynamic" -eq 0 ] 2>/dev/null || ui_print "✓ 自动发现额外 OEM 字体分区：$_inventory_dynamic 个"
     else
         # The install must remain successful even when the current flash namespace
@@ -180,6 +187,7 @@ else
     : > "$MODPATH/config/stock_inventory_scan_pending" 2>/dev/null || true
     ui_print "• 字体扫描组件暂不可用；已安排开机前自动重试，不中止安装"
 fi
+type luoshu_install_step >/dev/null 2>&1 && luoshu_install_step 3 "安装模块与 App"
 # 安装安全 CLI，不暴露上一字体回滚、热刷新或重启 SystemUI 命令。
 cp -f "$MODPATH/common/luoshu_cli.sh" "$MODPATH/system/bin/洛书" 2>/dev/null || true
 chmod 0755 "$MODPATH"/*.sh "$MODPATH/common"/*.sh 2>/dev/null || true

@@ -60,14 +60,24 @@ internal fun taskKindFor(message: String, type: String = ""): TaskKind {
 }
 
 internal fun taskPhaseFor(level: String, message: String, state: String = ""): TaskPhase {
-    val normalized = "$state $level $message".lowercase()
-    return when {
-        "failed" in normalized || "error" in normalized || "失败" in normalized || "错误" in normalized -> TaskPhase.FAILED
-        "重启后" in normalized || "等待重启" in normalized || "reboot required" in normalized -> TaskPhase.WAITING_REBOOT
-        state == "queued" || "queued" in normalized || "排队" in normalized || "等待执行" in normalized -> TaskPhase.QUEUED
-        state == "running" || "running" in normalized || "正在" in normalized || "开始" in normalized || "处理中" in normalized -> TaskPhase.RUNNING
-        state == "success" || "success" in normalized || "成功" in normalized || "已完成" in normalized || "完成" in normalized -> TaskPhase.SUCCESS
-        else -> TaskPhase.INFO
+    val normalized = "$level $message".lowercase()
+    // Persisted terminal states win over stale stage text. A stage=100 is not
+    // evidence of success: backend errors and reboot-pending remain distinct.
+    return when (state.lowercase()) {
+        "failed", "error", "cancelled", "timeout" -> TaskPhase.FAILED
+        "queued" -> TaskPhase.QUEUED
+        "running" -> TaskPhase.RUNNING
+        "prepared", "pending-reboot" -> TaskPhase.WAITING_REBOOT
+        "success" -> if ("重启后" in normalized || "等待重启" in normalized || "reboot required" in normalized)
+            TaskPhase.WAITING_REBOOT else TaskPhase.SUCCESS
+        else -> when {
+            "failed" in normalized || "error" in normalized || "失败" in normalized || "错误" in normalized -> TaskPhase.FAILED
+            "重启后" in normalized || "等待重启" in normalized || "reboot required" in normalized -> TaskPhase.WAITING_REBOOT
+            "queued" in normalized || "排队" in normalized || "等待执行" in normalized -> TaskPhase.QUEUED
+            "running" in normalized || "正在" in normalized || "开始" in normalized || "处理中" in normalized -> TaskPhase.RUNNING
+            "success" in normalized || "成功" in normalized || "已完成" in normalized || "完成" in normalized -> TaskPhase.SUCCESS
+            else -> TaskPhase.INFO
+        }
     }
 }
 
@@ -91,10 +101,14 @@ internal fun parseTaskLogItems(content: String, limit: Int = 18): List<TaskCente
         val match = structuredLog.matchEntire(line)
         val time = match?.groupValues?.getOrNull(1).orEmpty()
         val level = match?.groupValues?.getOrNull(2).orEmpty()
-        val message = match?.groupValues?.getOrNull(3)?.trim().orEmpty().ifBlank { line }
+        val rawMessage = match?.groupValues?.getOrNull(3)?.trim().orEmpty().ifBlank { line }
+        val message = taskDisplayMessage(rawMessage)
         val kind = taskKindFor(message)
         if (kind == TaskKind.DIAGNOSTIC) return@mapIndexedNotNull null
-        val phase = taskPhaseFor(level, message)
+        val observedPhase = taskPhaseFor(level, rawMessage)
+        // Log lines record the past; only a persisted/live task snapshot may
+        // claim an active process. Stage messages otherwise survive forever.
+        val phase = if (observedPhase == TaskPhase.RUNNING || observedPhase == TaskPhase.QUEUED) TaskPhase.INFO else observedPhase
         val progress = percentPattern.find(message)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100) ?: -1
         TaskCenterItem(
             id = "log-$index-${message.hashCode()}",
@@ -109,7 +123,7 @@ internal fun parseTaskLogItems(content: String, limit: Int = 18): List<TaskCente
 
     val seen = linkedSetOf<String>()
     return candidates.filter { item ->
-        val key = "${item.kind}:${item.phase}:${item.message.lowercase()}"
+        val key = "${item.kind}:${item.phase}:${taskDisplayMessage(item.message).lowercase()}"
         seen.add(key)
     }.take(limit)
 }
@@ -121,7 +135,7 @@ internal fun mergeTaskItems(
 ): List<TaskCenterItem> {
     val seen = linkedSetOf<String>()
     return (current + history).filter { item ->
-        val key = "${item.kind}:${item.message.lowercase()}"
+        val key = "${item.kind}:${taskDisplayMessage(item.message).lowercase()}"
         seen.add(key)
     }.take(limit)
 }

@@ -38,16 +38,14 @@ SWITCH_LOCK="$MODDIR/.font_switch.lock"
 PROGRESS_FILE="${LUOSHU_SWITCH_PROGRESS_FILE:-}"
 SWITCH_CACHE_ROOT="$CONFIG_DIR/safe-switch-cache"
 SWITCH_VALIDATION_CACHE_ROOT="$CONFIG_DIR/safe-switch-validation"
-SWITCH_CACHE_SCHEMA="safe-switch-metrics-v1"
+SWITCH_CACHE_SCHEMA="safe-switch-metrics-v3-roles-real-weights"
 SWITCH_CACHE_MAX_ENTRIES="${LUOSHU_SWITCH_CACHE_MAX_ENTRIES:-3}"
 SWITCH_CACHE_MAX_KB="${LUOSHU_SWITCH_CACHE_MAX_KB:-786432}"
 case "$SWITCH_CACHE_MAX_ENTRIES" in ''|*[!0-9]*) SWITCH_CACHE_MAX_ENTRIES=3 ;; esac
 case "$SWITCH_CACHE_MAX_KB" in ''|*[!0-9]*) SWITCH_CACHE_MAX_KB=786432 ;; esac
 [ "$SWITCH_CACHE_MAX_ENTRIES" -ge 1 ] 2>/dev/null || SWITCH_CACHE_MAX_ENTRIES=1
 [ "$SWITCH_CACHE_MAX_KB" -ge 131072 ] 2>/dev/null || SWITCH_CACHE_MAX_KB=131072
-PREWARM_LOCK="$MODDIR/.safe-switch-prewarm.lock"
 LOCK_HELD=false
-PREWARM_LOCK_HELD=false
 
 export MODULE_DIR LUOSHU_PUBLIC_DIR="$USER_ROOT"
 [ -f "$LEGACY_DIR/util_functions.sh" ] && . "$LEGACY_DIR/util_functions.sh"
@@ -109,7 +107,13 @@ safe_mapper_identity() {
     {
         for _smi_file in "$LEGACY_DIR/rom_adapters.sh" \
                          "$MODDIR/common/hyperos_stage_complete.sh" \
-                         "$MODDIR/common/coloros_stage_complete.sh"; do
+                         "$MODDIR/common/coloros_stage_complete.sh" \
+                         "$MODDIR/common/hyperos_metrics_batch.py" \
+                         "$MODDIR/common/coloros_metrics_batch.py" \
+                         "$MODDIR/common/hyperos_physical_policy.py" \
+                         "$MODDIR/common/font_role_policy.py" \
+                         "$MODDIR/common/font_slot_weight.py" \
+                         "$MODDIR/common/font_slot_coverage.py"; do
             [ -f "$_smi_file" ] || continue
             if command -v cksum >/dev/null 2>&1; then
                 cksum "$_smi_file" 2>/dev/null | awk -v p="$_smi_file" '{print p "|" $1 "|" $2}'
@@ -333,31 +337,7 @@ lock_cleanup() {
     LOCK_HELD=false
 }
 
-prewarm_lock_cleanup() {
-    [ "$PREWARM_LOCK_HELD" = true ] || return 0
-    if type luoshu_font_lock_release >/dev/null 2>&1; then
-        luoshu_font_lock_release "$PREWARM_LOCK" "$$" >/dev/null 2>&1 || \
-            luoshu_font_lock_force_clear "$PREWARM_LOCK" "$$" >/dev/null 2>&1 || true
-    fi
-    PREWARM_LOCK_HELD=false
-}
 
-prewarm_lock_acquire() {
-    type luoshu_font_lock_acquire >/dev/null 2>&1 || return 1
-    luoshu_font_lock_acquire "$PREWARM_LOCK" "$$"
-    _pl_rc=$?
-    [ "$_pl_rc" -eq 0 ] || return "$_pl_rc"
-    PREWARM_LOCK_HELD=true
-    return 0
-}
-
-switch_busy() {
-    if type luoshu_font_lock_active >/dev/null 2>&1; then
-        luoshu_font_lock_active "$SWITCH_LOCK"
-        return $?
-    fi
-    [ -e "$SWITCH_LOCK" ]
-}
 
 safe_switch_cache_ready() {
     _scrd_file="$1"; _scrd_font="$2"
@@ -376,18 +356,7 @@ safe_switch_cache_ready() {
 }
 
 wait_for_prewarm_cache() {
-    _wfpc_file="$1"; _wfpc_font="$2"
-    safe_switch_cache_ready "$_wfpc_file" "$_wfpc_font" && return 0
-    type luoshu_font_lock_active >/dev/null 2>&1 || return 1
-    luoshu_font_lock_active "$PREWARM_LOCK" >/dev/null 2>&1 || return 1
-    _wfpc_steps=0
-    while [ "$_wfpc_steps" -lt 16 ]; do
-        sleep 0.25 2>/dev/null || sleep 1
-        safe_switch_cache_ready "$_wfpc_file" "$_wfpc_font" && return 0
-        luoshu_font_lock_active "$PREWARM_LOCK" >/dev/null 2>&1 || break
-        _wfpc_steps=$((_wfpc_steps + 1))
-    done
-    return 1
+    safe_switch_cache_ready "$1" "$2"
 }
 
 lock_acquire() {
@@ -413,10 +382,10 @@ cleanup_stale_stages() {
     done
 }
 
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup' EXIT
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup; exit 129' HUP
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup; exit 130' INT
-trap 'cleanup_stage; prewarm_lock_cleanup; lock_cleanup; exit 143' TERM
+trap 'cleanup_stage; lock_cleanup' EXIT
+trap 'cleanup_stage; lock_cleanup; exit 129' HUP
+trap 'cleanup_stage; lock_cleanup; exit 130' INT
+trap 'cleanup_stage; lock_cleanup; exit 143' TERM
 
 find_text_font_file() {
     _wanted="$1"
@@ -508,6 +477,9 @@ stage_clone_live() {
 }
 
 stage_clear_text_payload() {
+    # These sidecars describe one payload/inventory, not permanent device policy.
+    # A new build must not inherit exclusions from a previous font/OTA state.
+    rm -f "$STAGE_PAYLOAD/.luoshu-stock-preserved.paths"           "$STAGE_PAYLOAD/.luoshu-font-role-report.json"           "$STAGE_PAYLOAD/.luoshu-metrics-report.json" 2>/dev/null || return 1
     for _part in $(safe_partition_list); do
         rm -rf "$STAGE_PAYLOAD/$_part/fonts" 2>/dev/null || true
         _etc="$STAGE_PAYLOAD/$_part/etc"
@@ -564,6 +536,16 @@ stage_coloros_complete() {
     _stage_bridge="$MODDIR/common/coloros_stage_complete.sh"
     [ -f "$_stage_bridge" ] || return 1
     LUOSHU_REAL_MODDIR="$MODDIR" sh "$_stage_bridge" "$STAGE_PAYLOAD" >> "$LOG_FILE" 2>&1
+}
+
+stage_preserve_font_roles() {
+    _pyroot="$MODDIR/common/python"
+    _python="$_pyroot/bin/luoshu-python"
+    [ -x "$_python" ] || return 1
+    PYTHONHOME="$_pyroot" \
+    PYTHONPATH="$MODDIR/common:$_pyroot/lib/python3.14:$_pyroot/lib/python3.14/site-packages" \
+    LD_LIBRARY_PATH="$_pyroot/lib:$_pyroot/lib/python3.14/lib-dynload${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$_python" "$MODDIR/common/font_role_policy.py" "$MODDIR" "$STAGE_PAYLOAD" >> "$LOG_FILE" 2>&1
 }
 
 stage_verify() {
@@ -650,77 +632,10 @@ write_runtime_state() {
     return 0
 }
 
-prewarm_start() {
-    _font="$1"
-    [ -n "$_font" ] && [ "$_font" != default ] || return 0
-    _source="$(find_text_font_file "$_font")"
-    [ -f "$_source" ] || return 0
-    type luoshu_start_detached >/dev/null 2>&1 || return 0
-    _prewarm_identity=$(safe_source_identity "$_source" 2>/dev/null)
-    [ -n "$_prewarm_identity" ] || return 0
-    _prewarm_key=$({
-        printf '%s\n' "$_font"
-        printf '%s\n' "$_prewarm_identity"
-    } | safe_hash_stream | cut -c1-12)
-    [ -n "$_prewarm_key" ] || return 0
-    _prewarm_pid="$CONFIG_DIR/font-prewarm-$_prewarm_key.pid"
-    _prewarm_log="$MODDIR/logs/font-prewarm.log"
-    _self="$MODDIR/common/legacy_v14_4/font_switch_safe.sh"
-    luoshu_start_detached "$_prewarm_pid" font_switch_safe.sh "$_prewarm_log" \
-        sh -c '
-            sleep 1
-            _script="$1"; _family="$2"; _public="$3"
-            [ -f "$_script" ] || exit 0
-            export LUOSHU_PUBLIC_DIR="$_public"
-            if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then
-                exec ionice -c 3 nice -n 19 sh "$_script" action prewarm "$_family"
-            elif command -v nice >/dev/null 2>&1; then
-                exec nice -n 19 sh "$_script" action prewarm "$_family"
-            fi
-            exec sh "$_script" action prewarm "$_family"
-        ' font_switch_safe.sh "$_self" "$_font" "$USER_ROOT" >/dev/null 2>&1 || true
-    return 0
-}
-
-prewarm_font() {
-    _font="$1"
-    [ -n "$_font" ] && [ "$_font" != default ] || return 0
-    [ -s "$CONFIG_DIR/device_font_inventory.json" ] || return 0
-    switch_busy && return 0
-
-    prewarm_lock_acquire
-    _prewarm_lock_rc=$?
-    [ "$_prewarm_lock_rc" -eq 0 ] || return 0
-    switch_busy && return 0
-
-    _source="$(find_text_font_file "$_font")"
-    [ -f "$_source" ] || return 0
-    validate_global "$_source" || return 0
-    safe_switch_cache_ready "$_source" "$_font" && return 0
-
-    stage_clone_live || return 0
-    stage_clear_text_payload || return 0
-    switch_busy && return 0
-
-    PAYLOAD_ROOT="$STAGE_PAYLOAD"
-    SYSTEM_FONTS_DIR="$STAGE_PAYLOAD/system/fonts"
-    export PAYLOAD_ROOT SYSTEM_FONTS_DIR
-    type apply_font_by_rom >/dev/null 2>&1 || return 0
-    apply_font_by_rom "$_source" "$SYSTEM_FONTS_DIR" quick "$_font" >> "$LOG_FILE" 2>&1 || return 0
-    mirror_existing_targets
-    switch_busy && return 0
-
-    if [ "${IS_HYPEROS:-false}" = true ]; then
-        stage_hyperos_complete || return 0
-    elif [ "${IS_COLOROS:-false}" = true ]; then
-        stage_coloros_complete || return 0
-    fi
-    stage_verify "$_font" || return 0
-    safe_switch_cache_store "$_source" "$_font" >/dev/null 2>&1 || return 0
-    printf '[%s] [SAFE-SWITCH] prewarm ready font=%s\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)" "$_font" >> "$LOG_FILE" 2>/dev/null || true
-    return 0
-}
+# Compatibility endpoints for the 1.1.1 App. Importing/opening a font must not
+# launch a detached FontTools job. Cache entries are built by an explicit switch.
+prewarm_start() { return 0; }
+prewarm_font() { return 0; }
 
 switch_font() {
     _font="$1"
@@ -737,7 +652,7 @@ switch_font() {
             safe_error "${FONT_CHECK_ERROR:-字体校验失败}"
             return 1
         fi
-        progress 14 '正在检查本机字体预热缓存'
+        progress 14 '正在检查本机已生成的字体缓存'
         wait_for_prewarm_cache "$_source" "$_font" >/dev/null 2>&1 || true
     fi
 
@@ -783,6 +698,7 @@ switch_font() {
             safe_switch_cache_store "$_source" "$_font" >/dev/null 2>&1 || true
         fi
         progress 86 '正在校验下一启动字体负载'
+        stage_preserve_font_roles || { safe_error '等宽字体保护校验失败，当前启动字体未改动'; return 1; }
         stage_verify "$_font" || { safe_error '新字体负载校验失败，当前启动字体未被改动'; return 1; }
     fi
 

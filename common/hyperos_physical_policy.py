@@ -7,6 +7,7 @@ cross-policy regression exercises that shell implementation directly.
 from __future__ import annotations
 
 from pathlib import Path
+from font_role_policy import is_code_monospace
 
 
 PARTITIONS = frozenset({
@@ -67,8 +68,8 @@ _UI_NAMES = frozenset({
 _NUMERIC = frozenset(f"{weight}.ttf" for weight in (100, 200, 300, 350, 400, 500, 600, 700, 800, 900))
 
 
-def safe_physical_font_name(name: str) -> bool:
-    """Match the full mapper's single-face, upright physical filename policy."""
+def stock_physical_font_name(name: str) -> bool:
+    """Stock census includes code monospace metrics without replacing them."""
     if Path(name).name != name or not name.endswith((".ttf", ".otf")):
         return False
     lower = name.lower()
@@ -90,3 +91,8 @@ def safe_physical_font_name(name: str) -> bool:
             or name in _UI_NAMES or name in _NUMERIC
             or any(stem == family or stem.startswith(family + "-")
                    for family in _NOTO_LATIN_UI_FAMILIES))
+
+
+def safe_physical_font_name(name: str) -> bool:
+    """Replacement eligibility is narrower than the stock font census."""
+    return stock_physical_font_name(name) and not is_code_monospace(name)

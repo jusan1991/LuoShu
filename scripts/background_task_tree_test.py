@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from host_task_scope_fixture import install_task_scope
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -141,7 +142,8 @@ class BackgroundTreeTest(unittest.TestCase):
         (module / "common").mkdir(parents=True)
         (module / "config").mkdir()
         (module / "config/active_font.conf").write_text("custom\n")
-        for name in ("background_task.sh", "font_switch_lock.sh"):
+        install_task_scope(module)
+        for name in ("font_switch_lock.sh",):
             (module / "common" / name).symlink_to(ROOT / "common" / name)
         (module / "common/google_font_provider_bridge.sh").write_text(
             f'case "$1" in fingerprint) echo current;; apply) exec sh "{manager}";; esac\n')

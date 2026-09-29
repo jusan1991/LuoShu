@@ -89,6 +89,7 @@ def _topology_digest(topology: dict[str, Any]) -> str:
         "families": topology.get("families"),
         "xmlAliases": topology.get("xmlAliases"),
         "unresolvedXmlRefs": topology.get("unresolvedXmlRefs"),
+        "runtime": topology.get("runtime"),
     }
     return f"sha256:{_canonical_hash(material)}"
 
@@ -641,6 +642,53 @@ def _validate_inputs(
     return build_key, profile_id
 
 
+def _global_constraints(
+    topology: dict[str, Any],
+    missing_role_slots: list[str],
+) -> dict[str, Any]:
+    summary = topology.get("summary") if isinstance(topology.get("summary"), dict) else {}
+    runtime = topology.get("runtime") if isinstance(topology.get("runtime"), dict) else {}
+    unresolved = topology.get("unresolvedXmlRefs")
+    unresolved_count = len(unresolved) if isinstance(unresolved, list) else 0
+
+    def count(name: str) -> int:
+        value = _int(summary.get(name), 0)
+        return max(0, value or 0)
+
+    data_font_files = count("dataFontFileCount")
+    data_font_refs = count("dataFontConfigReferenceCount")
+    if not data_font_files:
+        files = runtime.get("dataFontFiles")
+        if isinstance(files, list):
+            data_font_files = len(files)
+    if not data_font_refs:
+        config = runtime.get("dataFontsConfig")
+        if isinstance(config, dict):
+            refs = config.get("references")
+            if isinstance(refs, list):
+                data_font_refs = len(refs)
+
+    requirements: list[str] = []
+    risks: list[str] = []
+    if data_font_files or data_font_refs:
+        requirements.append("data-font-layer-review")
+        risks.append("data-font-layer-active")
+    if unresolved_count:
+        requirements.append("resolve-unresolved-xml-refs")
+        risks.append("unresolved-xml-routes")
+    if missing_role_slots:
+        requirements.append("complete-role-map")
+        risks.append("missing-role-evidence")
+    return {
+        "requirements": sorted(requirements),
+        "risks": sorted(risks),
+        "dataFontFileCount": data_font_files,
+        "dataFontConfigReferenceCount": data_font_refs,
+        "unresolvedXmlRefCount": unresolved_count,
+        "missingRoleSlotCount": len(missing_role_slots),
+    }
+
+
 def build_plan(
     topology: dict[str, Any],
     roles: dict[str, Any],
@@ -692,6 +740,7 @@ def build_plan(
         "targets": targets,
     }
     plan_id = f"sha256:{_canonical_hash(semantic)}"
+    constraints = _global_constraints(topology, missing_role_slots)
     plan = {
         "schema": SCHEMA,
         "planRevision": PLAN_REVISION,
@@ -713,6 +762,7 @@ def build_plan(
             "familyCount": profile.get("summary", {}).get("familyCount"),
             "capabilities": dict(profile.get("summary", {}).get("capabilities") or {}),
         },
+        "constraints": constraints,
         "summary": {
             "slotCount": len(targets),
             "actionCounts": dict(sorted(action_counts.items())),

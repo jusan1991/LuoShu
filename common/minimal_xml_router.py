@@ -608,14 +608,17 @@ def build_route_plan(
             artifact = _artifact_contract(font_plan, target, node)
             key = (source_xml, int(node["ordinal"]))
             previous = node_artifacts.get(key)
-            if previous is not None and previous != artifact["artifactId"]:
-                conflicts.append({
-                    "sourceXml": source_xml,
-                    "ordinal": int(node["ordinal"]),
-                    "firstArtifactId": previous,
-                    "secondArtifactId": artifact["artifactId"],
-                    "targetPath": target_path,
-                })
+            if previous is not None:
+                if previous != artifact["artifactId"]:
+                    conflicts.append({
+                        "sourceXml": source_xml,
+                        "ordinal": int(node["ordinal"]),
+                        "firstArtifactId": previous,
+                        "secondArtifactId": artifact["artifactId"],
+                        "targetPath": target_path,
+                    })
+                # Duplicate XML graph evidence for the same target/node/artifact is
+                # not a second mutation.
                 continue
             node_artifacts[key] = artifact["artifactId"]
 

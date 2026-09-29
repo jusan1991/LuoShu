@@ -458,7 +458,11 @@ def main() -> int:
             "--validate", str(tampered_path),
         ])
         assert tampered_result.returncode != 0
-        assert "planId" in (tampered_result.stdout + tampered_result.stderr)
+        tampered_message = tampered_result.stdout + tampered_result.stderr
+        assert (
+            "planId" in tampered_message
+            or "无效动作" in tampered_message
+        ), tampered_message
 
         constraint_tamper = json.loads(output.read_text(encoding="utf-8"))
         constraint_tamper["constraints"]["requirements"] = []

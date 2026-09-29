@@ -264,7 +264,7 @@ def main() -> int:
         # 2) Specialized clock: target digit advances must remain byte-exact.
         clock_source = temp / "User-Clock.ttf"
         clock_stock = temp / "AndroidClock.ttf"
-        make_font(clock_source, family="User Clock", advance=540, y_min=-70, y_max=650)
+        make_font(clock_source, family="User Clock", advance=620, y_min=-70, y_max=650)
         make_font(clock_stock, family="Android Clock", advance=760, y_min=-90, y_max=690)
         clock_xml = temp / "clock.xml"
         clock_xml.write_text(

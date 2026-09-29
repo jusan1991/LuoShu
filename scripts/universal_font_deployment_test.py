@@ -137,6 +137,8 @@ def main() -> int:
         manifest = deployment.build_deployment(
             font_plan, route_plan, artifact_manifest, payload_root
         )
+        assert Path.cwd().is_dir()
+        assert (ROOT / "scripts/universal_font_deployment_bridge_test.sh").is_file()
         deployment.validate_deployment(
             manifest, font_plan, route_plan, artifact_manifest, payload_root
         )
@@ -181,6 +183,8 @@ def main() -> int:
         second = deployment.build_deployment(
             font_plan, route_plan, artifact_manifest, second_root
         )
+        assert Path.cwd().is_dir()
+        assert (ROOT / ".git").exists() or (ROOT / "scripts").is_dir()
         assert second["payloadDigest"] == manifest["payloadDigest"]
         assert second["deploymentId"] == manifest["deploymentId"]
 

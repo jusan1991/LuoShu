@@ -411,11 +411,16 @@ def _source_ref(face: dict[str, Any]) -> dict[str, Any]:
     names = face.get("names") if isinstance(face.get("names"), dict) else {}
     style = _face_style(face)
     variation = _face_variation(face)
+    metrics = face.get("metrics") if isinstance(face.get("metrics"), dict) else {}
+    coverage = face.get("coverage") if isinstance(face.get("coverage"), dict) else {}
+    capabilities = _face_capabilities(face)
+    warnings = face.get("warnings") if isinstance(face.get("warnings"), list) else []
     return {
         "uid": str(face.get("uid") or ""),
         "fileUid": str(face.get("fileUid") or ""),
         "sourcePath": str(face.get("_sourcePath") or ""),
         "sourceContainer": str(face.get("_sourceContainer") or ""),
+        "format": str(face.get("format") or ""),
         "faceIndex": _int(face.get("faceIndex"), 0) or 0,
         "family": str(names.get("family") or ""),
         "subfamily": str(names.get("subfamily") or ""),
@@ -424,6 +429,10 @@ def _source_ref(face: dict[str, Any]) -> dict[str, Any]:
         "italic": style.get("italic") is True,
         "variable": variation.get("variable") is True,
         "axes": list(variation.get("axes") or []) if isinstance(variation.get("axes"), list) else [],
+        "metrics": dict(metrics),
+        "coverage": dict(coverage),
+        "capabilities": dict(capabilities),
+        "warnings": list(warnings),
     }
 
 
@@ -502,6 +511,13 @@ def _plan_slot(
         "roleAction": role_action,
         "runtimeEvidence": dict(slot.get("runtimeEvidence") or {}) if isinstance(slot.get("runtimeEvidence"), dict) else {},
         "legacyReplaceable": slot.get("legacyReplaceable") if isinstance(slot.get("legacyReplaceable"), bool) else None,
+        "targetContract": {
+            "weight": _target_weight(slot),
+            "italic": _target_italic(slot),
+            "variable": _target_variable(slot),
+            "metrics": dict(slot.get("metrics") or {}) if isinstance(slot.get("metrics"), dict) else {},
+            "coverage": dict(_coverage(slot)),
+        },
         "action": "review",
         "status": "review",
         "compiler": "none",

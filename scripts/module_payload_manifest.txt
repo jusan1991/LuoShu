@@ -121,6 +121,10 @@ common/minimal_xml_router.py
 common/minimal_xml_router.sh
 common/universal_font_compiler.py
 common/universal_font_compiler.sh
+common/universal_font_deployment.py
+common/universal_font_deployment.sh
+common/universal_next_boot.sh
+common/universal_mount_runtime.sh
 common/weighted_mix_task.sh
 common/python
 .luoshu-runtime

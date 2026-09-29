@@ -125,6 +125,8 @@ common/universal_font_deployment.py
 common/universal_font_deployment.sh
 common/universal_next_boot.sh
 common/universal_mount_runtime.sh
+common/universal_font_runtime_verify.py
+common/universal_font_runtime_verify.sh
 common/weighted_mix_task.sh
 common/python
 .luoshu-runtime

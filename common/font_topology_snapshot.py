@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 SCHEMA = "device-font-topology-v1"
-TOPOLOGY_REVISION = 1
+TOPOLOGY_REVISION = 2
 FONT_EXTENSIONS = (".ttf", ".otf", ".ttc", ".otc")
 ABS_FONT_PATH_RE = re.compile(
     r"(/[A-Za-z0-9_./+@=-]+\.(?:ttf|otf|ttc|otc))",
@@ -277,6 +277,7 @@ def validate_topology(data: dict[str, Any], expected_build_key: str | None = Non
 
 def build_topology(
     inventory: dict[str, Any],
+    candidates: dict[str, Any] | None,
     font_manager_dump: str,
     data_fonts_config: Path | None,
     data_fonts_dir: Path | None,
@@ -294,10 +295,62 @@ def build_topology(
         if not logical or not isinstance(value, dict):
             continue
         slots[logical] = dict(value)
+
+    # The legacy inventory intentionally contains only replaceable UI slots.
+    # Topology must describe *all* visible stock fonts, including protected
+    # emoji/serif/symbol/fallback faces, so merge the full physical candidate probe.
+    candidate_entries = candidates.get("paths") if isinstance(candidates, dict) else []
+    if isinstance(candidate_entries, list):
+        for raw in candidate_entries:
+            if not isinstance(raw, dict):
+                continue
+            logical = str(raw.get("path") or "").strip()
+            if not logical.startswith("/") or not logical.lower().endswith(FONT_EXTENSIONS):
+                continue
+            current = slots.setdefault(logical, {
+                "slotName": str(raw.get("slotName") or Path(logical).name),
+                "path": logical,
+                "partition": str(raw.get("partition") or _partition_for_path(logical, slots)),
+                "source": "physical-scan",
+                "families": [],
+            })
+            current["physicalCandidate"] = raw.get("candidate") is True
+            current["physicalReason"] = str(raw.get("reason") or "")
+
     if not slots:
         raise TopologyError("原厂字体清单槽位为空")
 
     families = _known_family_paths(inventory)
+
+    # Scanner revision 5 preserves the complete XML semantic graph separately
+    # from legacy replaceable slots. Merge family attrs/lang/variant/fallbackFor
+    # into topology without changing current production replacement behavior.
+    xml_graph = inventory.get("xmlGraph")
+    xml_refs = xml_graph.get("refs") if isinstance(xml_graph, dict) else []
+    unresolved_xml_refs: list[dict[str, Any]] = []
+    if isinstance(xml_refs, list):
+        for raw in xml_refs:
+            if not isinstance(raw, dict):
+                continue
+            family = str(raw.get("family") or "").strip()
+            logical = str(raw.get("resolvedPath") or "").strip()
+            if family and logical:
+                bucket = families.setdefault(family, [])
+                if logical not in bucket:
+                    bucket.append(logical)
+            if not logical or logical not in slots:
+                unresolved_xml_refs.append(dict(raw))
+                continue
+            entry = slots[logical]
+            refs = entry.setdefault("xmlRefs", [])
+            ref_copy = dict(raw)
+            if ref_copy not in refs:
+                refs.append(ref_copy)
+            if family:
+                names = entry.setdefault("families", [])
+                if family not in names:
+                    names.append(family)
+
     slot_families = _slot_family_index(families)
     manager = _font_manager_evidence(font_manager_dump, slots, families)
     mounts = _mount_evidence(mount_text, slots)
@@ -361,10 +414,14 @@ def build_topology(
         "inventoryRevision": inventory.get("inventoryRevision"),
         "summary": {
             "slotCount": len(normalized_slots),
+            "legacyUiSlotCount": len(raw_slots),
+            "physicalFontCount": len(normalized_slots),
             "familyCount": len(normalized_families),
             "edgeCount": len(edges),
             "partitionCount": len(partitions),
             "xmlSourceCount": len(xml_sources),
+            "xmlRefCount": len(xml_refs) if isinstance(xml_refs, list) else 0,
+            "unresolvedXmlRefCount": len(unresolved_xml_refs),
             "runtimeConfirmedSlotCount": len(manager_slots | mount_slots),
             "runtimeConfirmedFamilyCount": len(manager_families),
             "dataFontFileCount": len(data_files),
@@ -372,6 +429,8 @@ def build_topology(
         },
         "partitions": partitions,
         "xmlSources": [str(value) for value in xml_sources],
+        "xmlAliases": list(xml_graph.get("aliases") or []) if isinstance(xml_graph, dict) else [],
+        "unresolvedXmlRefs": unresolved_xml_refs,
         "families": normalized_families,
         "slots": normalized_slots,
         "edges": edges,
@@ -404,6 +463,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inventory", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--candidates", type=Path)
     parser.add_argument("--font-manager-dump", type=Path)
     parser.add_argument("--data-fonts-config", type=Path)
     parser.add_argument("--data-fonts-dir", type=Path)
@@ -430,8 +490,10 @@ def main() -> int:
 
     try:
         inventory = _load_json(args.inventory)
+        candidates = _load_json(args.candidates) if args.candidates and args.candidates.is_file() else None
         payload = build_topology(
             inventory,
+            candidates,
             _read_text(args.font_manager_dump),
             args.data_fonts_config,
             args.data_fonts_dir,

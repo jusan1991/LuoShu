@@ -32,7 +32,8 @@ SYMBOL_TOKENS = (
     "glyph", "weather", "fontello", "barcode", "qrcode", "braille",
 )
 CLOCK_TOKENS = (
-    "clock", "clockopia", "lockscreen", "lock-screen", "numeral", "mitype",
+    "clock", "clockopia", "lockscreen", "lock-screen", "numeral",
+    "mitypemono", "mitype-mono",
 )
 NUMERIC_TOKENS = ("numeric", "number-font", "numberfont", "digit-font", "digitfont")
 MONO_FAMILIES = (
@@ -197,6 +198,18 @@ def _explicit_mono_family(families: list[str]) -> bool:
     return False
 
 
+def _code_mono_identity(path: str, families: list[str]) -> bool:
+    if _explicit_mono_family(families):
+        return True
+    filename = normalize(Path(path).name)
+    if _contains_phrase(filename, ("mitypemono", "mitype-mono")):
+        return False
+    return _contains_phrase(
+        filename,
+        ("mono", "monospace", "courier", "consolas", "sourcecode", "source-code"),
+    )
+
+
 def _serif_family(families: list[str]) -> bool:
     for raw in families:
         family = normalize(raw)
@@ -304,6 +317,10 @@ def _classification(
         role = "serif"
         confidence = 85
         reasons.append("serif-filename")
+    elif _code_mono_identity(path, families):
+        role = "monospace"
+        confidence = 88
+        reasons.append("monospace-file-identity")
     elif _contains_phrase(text, CLOCK_TOKENS):
         role = "clock"
         confidence = 95 if families else 85

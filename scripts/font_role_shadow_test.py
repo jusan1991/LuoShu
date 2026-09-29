@@ -27,6 +27,7 @@ def slot(
     digits: bool = False,
     replaceable: bool | None = None,
     runtime: bool = False,
+    xml_lang: str = "",
 ) -> dict:
     coverage = {
         "hasHan": han,
@@ -45,6 +46,13 @@ def slot(
         "metrics": {"coverage": coverage},
         "runtimeEvidence": {"fontManager": runtime, "mount": False},
     }
+    if xml_lang:
+        value["xmlRefs"] = [{
+            "sourceXml": "/system/etc/fonts.xml",
+            "family": families[0] if families else "",
+            "familyAttributes": {"lang": xml_lang},
+            "resolvedPath": "/system/fonts/" + name,
+        }]
     if replaceable is not None:
         value["replaceable"] = replaceable
     return value
@@ -65,13 +73,13 @@ def main() -> int:
                 "Roboto-Regular.ttf", ["sans-serif"], latin=True, digits=True,
                 replaceable=True, runtime=True,
             ),
-            "/product/fonts/NotoSansSC-Regular.otf": slot(
-                "NotoSansSC-Regular.otf", ["zh-Hans"], han=True, latin=True, digits=True,
-                replaceable=False,
+            "/product/fonts/CjkFallback.otf": slot(
+                "CjkFallback.otf", ["fallback"], han=True, latin=True, digits=True,
+                replaceable=False, xml_lang="zh-Hans",
             ),
             "/product/fonts/LatinFallback.ttf": slot(
-                "LatinFallback.ttf", ["latin-fallback"], latin=True, digits=True,
-                replaceable=False,
+                "LatinFallback.ttf", ["fallback"], latin=True, digits=True,
+                replaceable=False, xml_lang="en",
             ),
             "/system_ext/fonts/OemNumeric.ttf": slot(
                 "OemNumeric.ttf", [], digits=True, replaceable=False,
@@ -95,9 +103,9 @@ def main() -> int:
             "/system/fonts/MaterialSymbols.ttf": slot(
                 "MaterialSymbols.ttf", ["material-symbols"], replaceable=True,
             ),
-            "/system/fonts/NotoSansJP-Regular.otf": slot(
-                "NotoSansJP-Regular.otf", ["japanese"], latin=True, digits=True,
-                replaceable=False,
+            "/system/fonts/MysteryFallback.otf": slot(
+                "MysteryFallback.otf", ["fallback"], latin=True, digits=True,
+                replaceable=False, xml_lang="ja",
             ),
             "/vendor/fonts/MysteryBroad.ttf": slot(
                 "MysteryBroad.ttf", [], han=True, latin=True, digits=True,
@@ -109,7 +117,7 @@ def main() -> int:
             json.dumps(
                 {
                     "schema": "device-font-topology-v1",
-                    "topologyRevision": 1,
+                    "topologyRevision": 2,
                     "state": "ready",
                     "buildKey": "role-shadow-test",
                     "romKind": "generic",
@@ -153,9 +161,10 @@ def main() -> int:
         assert role("/system/fonts/Roboto-Regular.ttf") == "ui-sans"
         assert action("/system/fonts/Roboto-Regular.ttf") == "replace"
 
-        assert role("/product/fonts/NotoSansSC-Regular.otf") == "cjk"
-        assert action("/product/fonts/NotoSansSC-Regular.otf") == "conditional"
-        assert shadow["slots"]["/product/fonts/NotoSansSC-Regular.otf"]["comparison"] == "current-gap"
+        assert role("/product/fonts/CjkFallback.otf") == "cjk"
+        assert action("/product/fonts/CjkFallback.otf") == "conditional"
+        assert role_map["slots"]["/product/fonts/CjkFallback.otf"]["evidence"]["xmlSemantics"]["lang"] == ["zh-Hans"]
+        assert shadow["slots"]["/product/fonts/CjkFallback.otf"]["comparison"] == "current-gap"
 
         assert role("/product/fonts/LatinFallback.ttf") == "latin"
         assert action("/product/fonts/LatinFallback.ttf") == "conditional"
@@ -180,8 +189,9 @@ def main() -> int:
         assert role("/system/fonts/MaterialSymbols.ttf") == "symbol-icon"
         assert action("/system/fonts/MaterialSymbols.ttf") == "preserve"
 
-        assert role("/system/fonts/NotoSansJP-Regular.otf") == "special-fallback"
-        assert action("/system/fonts/NotoSansJP-Regular.otf") == "preserve"
+        assert role("/system/fonts/MysteryFallback.otf") == "special-fallback"
+        assert action("/system/fonts/MysteryFallback.otf") == "preserve"
+        assert "xml-language-special-fallback" in role_map["slots"]["/system/fonts/MysteryFallback.otf"]["reasons"]
 
         assert role("/vendor/fonts/MysteryBroad.ttf") == "unknown-protected"
         assert action("/vendor/fonts/MysteryBroad.ttf") == "review"

@@ -387,14 +387,22 @@ def _find_unique_node(locator: dict[str, Any], nodes: list[dict[str, Any]]) -> t
 def _artifact_extension(target: dict[str, Any], node: dict[str, Any]) -> str:
     declared_suffix = Path(str(node.get("declared") or "")).suffix.lower()
     source = target.get("source") if isinstance(target.get("source"), dict) else {}
-    fmt = str(source.get("format") or "").upper()
+    target_contract = target.get("targetContract") if isinstance(target.get("targetContract"), dict) else {}
+    target_format = str(target_contract.get("format") or "").upper()
+    source_format = str(source.get("format") or "").upper()
     if declared_suffix == ".otc":
         return ".otc"
     if declared_suffix == ".ttc":
         return ".ttc"
     if int(node.get("index") or 0) > 0:
-        return ".otc" if "CFF" in fmt else ".ttc"
-    if "CFF" in fmt:
+        return ".otc" if "OTF" in target_format or "CFF" in target_format else ".ttc"
+    if target_format == "OTF" or "CFF" in target_format:
+        return ".otf"
+    if target_format == "TTC":
+        return ".ttc"
+    if target_format == "OTC":
+        return ".otc"
+    if "CFF" in source_format:
         return ".otf"
     return ".ttf"
 

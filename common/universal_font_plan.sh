@@ -61,6 +61,7 @@ _ufp_build() {
     fi
     _ufb_profile=$(_ufp_profile_path "$_ufb_family") || return 1
     [ -s "$_ufb_profile" ] || { printf '{"status":"error","message":"源字体 Profile 未生成"}\n'; return 1; }
+    rm -rf "$CONFIG_DIR/minimal-xml-route-plans" 2>/dev/null || true
     mkdir -p "$PLAN_DIR" 2>/dev/null || { printf '{"status":"error","message":"无法创建 FontPlan 缓存目录"}\n'; return 1; }
     _ufb_output=$(_ufp_output "$_ufb_family") || return 1
     _ufp_exec "$PLANNER" \

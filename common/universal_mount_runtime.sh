@@ -98,6 +98,18 @@ _ufmr_visible_target() {
     fi
 }
 
+_ufmr_real_target() {
+    _ufmr_path="$1"
+    _ufmr_real=''
+    if command -v readlink >/dev/null 2>&1; then
+        _ufmr_real=$(readlink -f "$_ufmr_path" 2>/dev/null)
+    elif command -v busybox >/dev/null 2>&1; then
+        _ufmr_real=$(busybox readlink -f "$_ufmr_path" 2>/dev/null)
+    fi
+    [ -n "$_ufmr_real" ] || _ufmr_real="$_ufmr_path"
+    printf '%s\n' "$_ufmr_real"
+}
+
 _ufmr_stage_for_manager() {
     case "$1" in
         KernelSU|KernelSU*|SukiSU|SukiSU*|APatch) printf 'post-mount\n' ;;
@@ -159,6 +171,8 @@ _ufmr_apply_dynamic() {
         _ufmr_source="$PAYLOAD/$_ufmr_source_rel"
         _ufmr_actual_target=$(_ufmr_visible_target "$_ufmr_target")
         [ -f "$_ufmr_source" ] && [ -f "$_ufmr_actual_target" ] || return 1
+        _ufmr_actual_target=$(_ufmr_real_target "$_ufmr_actual_target")
+        [ -f "$_ufmr_actual_target" ] || return 1
         [ "$(_ufmr_hash "$_ufmr_source")" = "$_ufmr_expected" ] || return 1
         if _ufmr_is_mounted "$_ufmr_actual_target"; then
             [ "$(_ufmr_hash "$_ufmr_actual_target")" = "$_ufmr_expected" ] || return 1

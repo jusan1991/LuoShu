@@ -58,6 +58,39 @@ _ufmr_umount() {
     fi
 }
 
+_ufmr_visible_target() {
+    _ufmr_logical="$1"
+    if [ -n "${LUOSHU_UNIVERSAL_TEST_VISIBLE_ROOT:-}" ]; then
+        printf '%s%s\n' "${LUOSHU_UNIVERSAL_TEST_VISIBLE_ROOT%/}" "$_ufmr_logical"
+    else
+        printf '%s\n' "$_ufmr_logical"
+    fi
+}
+
+_ufmr_stage_for_manager() {
+    case "$1" in
+        KernelSU|KernelSU*|SukiSU|SukiSU*|APatch) printf 'post-mount\n' ;;
+        *) printf 'post-fs-data\n' ;;
+    esac
+}
+
+_ufmr_system_mount() {
+    if [ -n "${LUOSHU_UNIVERSAL_TEST_SYSTEM_MOUNT_COMMAND:-}" ]; then
+        "$LUOSHU_UNIVERSAL_TEST_SYSTEM_MOUNT_COMMAND"
+    else
+        type luoshu_private_self_mount_ensure >/dev/null 2>&1 || return 1
+        luoshu_private_self_mount_ensure
+    fi
+}
+
+_ufmr_system_rollback() {
+    if [ -n "${LUOSHU_UNIVERSAL_TEST_SYSTEM_ROLLBACK_COMMAND:-}" ]; then
+        "$LUOSHU_UNIVERSAL_TEST_SYSTEM_ROLLBACK_COMMAND" >/dev/null 2>&1 || true
+        return 0
+    fi
+    _ufmr_rollback_system
+}
+
 _ufmr_is_mounted() {
     _ufmr_target="$1"
     _ufmr_mountinfo="${LUOSHU_UNIVERSAL_MOUNTINFO:-/proc/self/mountinfo}"
@@ -83,22 +116,23 @@ _ufmr_apply_dynamic() {
         case "$_ufmr_source_rel" in .luoshu-dynamic/*) ;; *) return 1 ;; esac
         case "$_ufmr_target" in /data/fonts/*) ;; *) return 1 ;; esac
         _ufmr_source="$PAYLOAD/$_ufmr_source_rel"
-        [ -f "$_ufmr_source" ] && [ -f "$_ufmr_target" ] || return 1
+        _ufmr_actual_target=$(_ufmr_visible_target "$_ufmr_target")
+        [ -f "$_ufmr_source" ] && [ -f "$_ufmr_actual_target" ] || return 1
         [ "$(_ufmr_hash "$_ufmr_source")" = "$_ufmr_expected" ] || return 1
-        if _ufmr_is_mounted "$_ufmr_target"; then
-            [ "$(_ufmr_hash "$_ufmr_target")" = "$_ufmr_expected" ] || return 1
-            printf '%s\n' "$_ufmr_target" >> "$DYNAMIC_LIST"
+        if _ufmr_is_mounted "$_ufmr_actual_target"; then
+            [ "$(_ufmr_hash "$_ufmr_actual_target")" = "$_ufmr_expected" ] || return 1
+            printf '%s\n' "$_ufmr_actual_target" >> "$DYNAMIC_LIST"
             continue
         fi
-        _ufmr_mount --bind "$_ufmr_source" "$_ufmr_target" >/dev/null 2>&1 || \
-            _ufmr_mount -o bind "$_ufmr_source" "$_ufmr_target" >/dev/null 2>&1 || return 1
-        _ufmr_mount -o remount,bind,ro "$_ufmr_target" >/dev/null 2>&1 || \
-            _ufmr_mount -o bind,remount,ro "$_ufmr_target" >/dev/null 2>&1 || true
-        [ "$(_ufmr_hash "$_ufmr_target")" = "$_ufmr_expected" ] || {
-            _ufmr_umount "$_ufmr_target" >/dev/null 2>&1 || true
+        _ufmr_mount --bind "$_ufmr_source" "$_ufmr_actual_target" >/dev/null 2>&1 || \
+            _ufmr_mount -o bind "$_ufmr_source" "$_ufmr_actual_target" >/dev/null 2>&1 || return 1
+        _ufmr_mount -o remount,bind,ro "$_ufmr_actual_target" >/dev/null 2>&1 || \
+            _ufmr_mount -o bind,remount,ro "$_ufmr_actual_target" >/dev/null 2>&1 || true
+        [ "$(_ufmr_hash "$_ufmr_actual_target")" = "$_ufmr_expected" ] || {
+            _ufmr_umount "$_ufmr_actual_target" >/dev/null 2>&1 || true
             return 1
         }
-        printf '%s\n' "$_ufmr_target" >> "$DYNAMIC_LIST" || return 1
+        printf '%s\n' "$_ufmr_actual_target" >> "$DYNAMIC_LIST" || return 1
     done < "$_ufmr_conf"
     return 0
 }
@@ -135,15 +169,20 @@ universal_font_mount_hook() {
     [ "$(_ufmr_value "$RUNTIME_CONF" pipeline)" = universal-font-deployment-v1 ] || return 1
     [ -d "$PAYLOAD" ] || return 1
     [ -s "$PAYLOAD/.luoshu-runtime/deployment/deployment.json" ] || return 1
-    type luoshu_detect_root_manager >/dev/null 2>&1 || return 1
-    type luoshu_self_mount_stage_for_manager >/dev/null 2>&1 || return 1
-    type luoshu_private_self_mount_ensure >/dev/null 2>&1 || return 1
-
-    _ufmr_manager=$(luoshu_detect_root_manager 2>/dev/null | head -n1)
-    _ufmr_stage=$(luoshu_self_mount_stage_for_manager "$_ufmr_manager" 2>/dev/null)
+    if [ -n "${LUOSHU_UNIVERSAL_TEST_MANAGER:-}" ]; then
+        _ufmr_manager="$LUOSHU_UNIVERSAL_TEST_MANAGER"
+    else
+        type luoshu_detect_root_manager >/dev/null 2>&1 || return 1
+        _ufmr_manager=$(luoshu_detect_root_manager 2>/dev/null | head -n1)
+    fi
+    if type luoshu_self_mount_stage_for_manager >/dev/null 2>&1; then
+        _ufmr_stage=$(luoshu_self_mount_stage_for_manager "$_ufmr_manager" 2>/dev/null)
+    else
+        _ufmr_stage=$(_ufmr_stage_for_manager "$_ufmr_manager")
+    fi
     [ "$_ufmr_stage" = "$_ufmr_hook" ] || return 2
 
-    if ! luoshu_private_self_mount_ensure >/dev/null 2>&1; then
+    if ! _ufmr_system_mount >/dev/null 2>&1; then
         _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 system-mount-failed
         _ufmr_log "system payload mount failed manager=$_ufmr_manager stage=$_ufmr_stage"
         return 1
@@ -151,7 +190,7 @@ universal_font_mount_hook() {
 
     if ! _ufmr_apply_dynamic; then
         _ufmr_rollback_dynamic
-        _ufmr_rollback_system
+        _ufmr_system_rollback
         type _luoshu_self_state_write >/dev/null 2>&1 && _luoshu_self_state_write failed rollback '' dynamic-mount-failed
         _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 dynamic-mount-failed
         _ufmr_log "dynamic mount failed; system payload rolled back"

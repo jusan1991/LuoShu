@@ -27,7 +27,7 @@ _role_shadow_exec() {
 }
 
 _role_shadow_refresh() {
-    mkdir -p "$CONFIG_DIR" "$MODDIR/logs" 2>/dev/null || true
+    mkdir -p "$CONFIG_DIR" "$MODDIR/logs" 2>/dev/null || true\n    rm -rf "$CONFIG_DIR/universal-font-plans" 2>/dev/null || true
     [ -f "$SCRIPT" ] || {
         printf '{"status":"error","message":"缺少字体角色分类组件"}\n'
         return 1

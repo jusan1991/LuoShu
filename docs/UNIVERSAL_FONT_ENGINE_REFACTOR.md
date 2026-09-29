@@ -171,7 +171,7 @@ Shadow 动作：
 - 风险与回退方案
 
 ### Phase 5 — Minimal XML Router
-状态：**进行中 / minimal-xml-route-plan-v1**
+状态：**已完成 / PR #258 / minimal-xml-route-plan-v1**
 
 目标：
 

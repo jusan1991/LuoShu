@@ -93,6 +93,10 @@ def main() -> int:
                 "MitypeMono.ttf", ["monospace"], latin=True, digits=True,
                 replaceable=True,
             ),
+            "/system/fonts/RobotoMono-Regular.ttf": slot(
+                "RobotoMono-Regular.ttf", [], latin=True, digits=True,
+                replaceable=False,
+            ),
             "/system/fonts/NotoSerif-Regular.ttf": slot(
                 "NotoSerif-Regular.ttf", ["serif"], latin=True, digits=True,
                 replaceable=False,
@@ -179,6 +183,10 @@ def main() -> int:
         assert action("/system/fonts/MitypeMono.ttf") == "preserve"
         assert shadow["slots"]["/system/fonts/MitypeMono.ttf"]["comparison"] == "current-overreach"
 
+        assert role("/system/fonts/RobotoMono-Regular.ttf") == "monospace"
+        assert action("/system/fonts/RobotoMono-Regular.ttf") == "preserve"
+        assert "monospace-file-identity" in role_map["slots"]["/system/fonts/RobotoMono-Regular.ttf"]["reasons"]
+
         assert role("/system/fonts/NotoSerif-Regular.ttf") == "serif"
         assert action("/system/fonts/NotoSerif-Regular.ttf") == "preserve"
 
@@ -205,7 +213,7 @@ def main() -> int:
             if item["role"] == "unknown-protected":
                 assert item["action"] == "review"
 
-        assert shadow["summary"]["actionCounts"]["preserve"] == 5
+        assert shadow["summary"]["actionCounts"]["preserve"] == 6
         assert shadow["summary"]["actionCounts"]["specialized"] == 2
         assert shadow["summary"]["actionCounts"]["conditional"] == 2
         assert shadow["summary"]["actionCounts"]["replace"] == 1

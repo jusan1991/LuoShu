@@ -480,8 +480,15 @@ def _geometry_plan(
     }
     plan = slot_plan_engine.slot_plan(spec, source_profile)
     if plan.get("status") != "ready":
-        reason = plan.get("reason") or ",".join(plan.get("unsafeProbes") or [])
-        raise CompilerError(f"目标槽位几何计划不可安全编译：{reason or plan.get('status')}")
+        unsafe = list(plan.get("unsafeProbes") or [])
+        degraded = list(plan.get("degradedProbes") or [])
+        if unsafe:
+            reason = "unsafe-probes:" + ",".join(unsafe)
+        elif degraded:
+            reason = "degraded-probes:" + ",".join(degraded)
+        else:
+            reason = str(plan.get("reason") or plan.get("status") or "unresolved")
+        raise CompilerError(f"目标槽位几何计划不可安全编译：{reason}")
     return plan
 
 

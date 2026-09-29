@@ -79,6 +79,10 @@ _topology_refresh() {
     _tf_result=$(_topology_exec "$@" 2>>"$LOG")
     _tf_rc=$?
     rm -f "$_tf_tmp" 2>/dev/null || true
+    if [ "$_tf_rc" -eq 0 ] && [ -s "$OUTPUT" ] && [ -f "$MODDIR/common/font_role_shadow.sh" ]; then
+        MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
+            sh "$MODDIR/common/font_role_shadow.sh" refresh >>"$MODDIR/logs/font-role-shadow.log" 2>&1 || true
+    fi
     printf '%s\n' "$_tf_result"
     return "$_tf_rc"
 }

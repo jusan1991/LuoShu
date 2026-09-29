@@ -436,6 +436,21 @@ def main() -> int:
         assert stale_result.returncode != 0
         assert "拓扑摘要" in (stale_result.stdout + stale_result.stderr)
 
+        # Same file/profileId but different analyzed capabilities is stale too.
+        changed_profile_data = json.loads(json.dumps(profile_data))
+        changed_profile_data["files"][0]["faces"][0]["style"]["weight"] = 450
+        changed_profile_path = temp / "changed-profile.json"
+        changed_profile_path.write_text(json.dumps(changed_profile_data), encoding="utf-8")
+        source_stale = run([
+            sys.executable, str(planner),
+            "--topology", str(topology),
+            "--roles", str(roles),
+            "--source-profile", str(changed_profile_path),
+            "--validate", str(output),
+        ])
+        assert source_stale.returncode != 0
+        assert "源字体摘要" in (source_stale.stdout + source_stale.stderr)
+
         # A Latin-only source must block CJK/UI-CJK instead of silently falling
         # back to a Latin face, while leaving protected slots untouched.
         latin_profile = temp / "latin-only.json"

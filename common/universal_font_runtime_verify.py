@@ -66,6 +66,29 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_frozen_contract(
+    deployment: dict[str, Any],
+    name: str,
+    path: Path,
+    id_key: str,
+    actual_id: str,
+) -> None:
+    contracts = deployment.get("verificationContracts")
+    if contracts is None:
+        # Compatibility with a Phase 7 payload prepared before Phase 8 existed.
+        return
+    if not isinstance(contracts, dict):
+        raise VerificationError("deployment verificationContracts invalid")
+    contract = contracts.get(name)
+    if not isinstance(contract, dict):
+        raise VerificationError(f"deployment verification contract missing: {name}")
+    if str(contract.get(id_key) or "") != actual_id:
+        raise VerificationError(f"deployment verification contract identity mismatch: {name}")
+    expected = str(contract.get("sha256") or "")
+    if len(expected) != 64 or _sha256(path) != expected:
+        raise VerificationError(f"deployment verification contract hash mismatch: {name}")
+
+
 def _visible_path(logical: str, visible_root: Path | None) -> Path:
     if visible_root is None:
         return Path(logical)
@@ -470,7 +493,16 @@ def verify(
         expected_sha = str(item.get("sha256") or "")
         visible = _visible_path(target_path, visible_root)
         mount_key = str(visible) if visible_root is not None else target_path
-        mount = mountinfo.get(mount_key) or mountinfo.get(target_path)
+        # Phase 7 resolves symlinked /data/fonts targets before bind-mounting.
+        # Match both the logical path and the same real path to avoid a false
+        # missing-mount result on OEM layouts that use symlinks.
+        real_mount_key = os.path.realpath(mount_key)
+        mount = (
+            mountinfo.get(mount_key)
+            or mountinfo.get(real_mount_key)
+            or mountinfo.get(target_path)
+            or mountinfo.get(os.path.realpath(target_path))
+        )
         dynamic_report: dict[str, Any] = {
             "targetPath": target_path,
             "visiblePath": str(visible),
@@ -655,6 +687,16 @@ def main() -> int:
         plan = _load(args.font_plan, PLAN_SCHEMA)
         artifacts = _load(args.artifact_manifest, ARTIFACT_SCHEMA)
         deployment = _load(args.deployment, DEPLOYMENT_SCHEMA)
+        _validate_frozen_contract(
+            deployment, "fontPlan", args.font_plan, "planId", str(plan.get("planId") or "")
+        )
+        _validate_frozen_contract(
+            deployment,
+            "artifactManifest",
+            args.artifact_manifest,
+            "manifestId",
+            str(artifacts.get("manifestId") or ""),
+        )
         font_dump = (
             args.font_dump.read_text(encoding="utf-8", errors="replace")
             if args.font_dump and args.font_dump.is_file()

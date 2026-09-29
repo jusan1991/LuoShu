@@ -24,6 +24,37 @@ _ufmr_log() {
     printf '[%s] [UNIVERSAL-MOUNT] %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)" "$*" >> "$MODDIR/logs/universal-mount.log" 2>/dev/null || true
 }
 
+_ufmr_python() {
+    _ufmr_root="$MODDIR/common/python"
+    _ufmr_bin="$_ufmr_root/bin/luoshu-python"
+    if [ -n "${LUOSHU_PYTHON:-}" ]; then
+        "$LUOSHU_PYTHON" "$@"
+        return $?
+    fi
+    [ -x "$_ufmr_bin" ] || return 127
+    PYTHONHOME="$_ufmr_root" \
+    PYTHONPATH="$MODDIR/common:$_ufmr_root/lib/python3.14:$_ufmr_root/lib/python3.14/site-packages" \
+    LD_LIBRARY_PATH="$_ufmr_root/lib:$_ufmr_root/lib/python3.14/lib-dynload${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$_ufmr_bin" "$@"
+}
+
+_ufmr_validate_payload() {
+    _ufmr_deployer="$MODDIR/common/universal_font_deployment.py"
+    _ufmr_manifest="$PAYLOAD/.luoshu-runtime/deployment/deployment.json"
+    [ -f "$_ufmr_deployer" ] && [ -s "$_ufmr_manifest" ] || return 1
+    _ufmr_python "$_ufmr_deployer" \
+        --payload-root "$PAYLOAD" \
+        --validate-payload-only "$_ufmr_manifest" >/dev/null 2>&1
+}
+
+_ufmr_has_partition_payload() {
+    for _ufmr_part in system system_ext product vendor odm oem my_product my_engineering my_company my_preload my_region my_stock oplus_product oplus_engineering oplus_version oplus_region mi_ext cust hw_product; do
+        [ -d "$PAYLOAD/$_ufmr_part" ] || continue
+        find "$PAYLOAD/$_ufmr_part" -type f -print -quit 2>/dev/null | grep -q . && return 0
+    done
+    return 1
+}
+
 _ufmr_value() {
     sed -n "s/^${2}=//p" "$1" 2>/dev/null | head -n1 | tr -d '\r\n'
 }
@@ -169,6 +200,11 @@ universal_font_mount_hook() {
     [ "$(_ufmr_value "$RUNTIME_CONF" pipeline)" = universal-font-deployment-v1 ] || return 1
     [ -d "$PAYLOAD" ] || return 1
     [ -s "$PAYLOAD/.luoshu-runtime/deployment/deployment.json" ] || return 1
+    _ufmr_validate_payload || {
+        _ufmr_write_state failed unknown "$_ufmr_hook" 0 payload-integrity-failed
+        _ufmr_log "payload integrity validation failed before mount"
+        return 1
+    }
     if [ -n "${LUOSHU_UNIVERSAL_TEST_MANAGER:-}" ]; then
         _ufmr_manager="$LUOSHU_UNIVERSAL_TEST_MANAGER"
     else
@@ -182,15 +218,19 @@ universal_font_mount_hook() {
     fi
     [ "$_ufmr_stage" = "$_ufmr_hook" ] || return 2
 
-    if ! _ufmr_system_mount >/dev/null 2>&1; then
-        _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 system-mount-failed
-        _ufmr_log "system payload mount failed manager=$_ufmr_manager stage=$_ufmr_stage"
-        return 1
+    _ufmr_system_mounted=0
+    if _ufmr_has_partition_payload; then
+        if ! _ufmr_system_mount >/dev/null 2>&1; then
+            _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 system-mount-failed
+            _ufmr_log "system payload mount failed manager=$_ufmr_manager stage=$_ufmr_stage"
+            return 1
+        fi
+        _ufmr_system_mounted=1
     fi
 
     if ! _ufmr_apply_dynamic; then
         _ufmr_rollback_dynamic
-        _ufmr_system_rollback
+        [ "$_ufmr_system_mounted" -eq 0 ] || _ufmr_system_rollback
         type _luoshu_self_state_write >/dev/null 2>&1 && _luoshu_self_state_write failed rollback '' dynamic-mount-failed
         _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 dynamic-mount-failed
         _ufmr_log "dynamic mount failed; system payload rolled back"

@@ -289,7 +289,7 @@ def _ref_value(ref: dict[str, Any], *names: str) -> str:
 def _ref_locator(ref: dict[str, Any]) -> dict[str, Any]:
     family = _ref_value(ref, "family", "familyName")
     declared = _ref_value(ref, "declared", "file", "filename")
-    postscript = _ref_value(ref, "postScriptName", "postscriptName", "name")
+    postscript = _ref_value(ref, "postScriptName", "postscriptName")
     return {
         "family": family,
         "familyNormalized": _normalize(family),
@@ -386,10 +386,14 @@ def _find_unique_node(locator: dict[str, Any], nodes: list[dict[str, Any]]) -> t
 
 def _artifact_extension(target: dict[str, Any], node: dict[str, Any]) -> str:
     declared_suffix = Path(str(node.get("declared") or "")).suffix.lower()
-    if int(node.get("index") or 0) > 0 or declared_suffix in {".ttc", ".otc"}:
-        return ".ttc"
     source = target.get("source") if isinstance(target.get("source"), dict) else {}
     fmt = str(source.get("format") or "").upper()
+    if declared_suffix == ".otc":
+        return ".otc"
+    if declared_suffix == ".ttc":
+        return ".ttc"
+    if int(node.get("index") or 0) > 0:
+        return ".otc" if "CFF" in fmt else ".ttc"
     if "CFF" in fmt:
         return ".otf"
     return ".ttf"
@@ -417,7 +421,7 @@ def _artifact_contract(font_plan: dict[str, Any], target: dict[str, Any], node: 
     return {
         "artifactId": f"ufc:{digest[:32]}",
         "suggestedFileName": f"LuoShu-UF-{digest[:20]}{extension}",
-        "container": "collection" if extension == ".ttc" else "sfnt",
+        "container": "collection" if extension in {".ttc", ".otc"} else "sfnt",
         "requiredFaceIndex": int(node.get("index") or 0),
         "requiredPostScriptName": str(node.get("postScriptName") or ""),
         "requiredAxes": list(node.get("axes") or []),
@@ -666,16 +670,16 @@ def build_route_plan(
     if plan_constraints.get("dataFontFileCount") or plan_constraints.get("dataFontConfigReferenceCount"):
         review_reasons.append("data-font-layer-deferred")
 
-    semantic = {
+    route_semantic = {
         "fontPlanId": font_plan["planId"],
-        "documents": documents,
+        "documents": _route_semantic_documents(documents),
         "unresolved": unresolved,
         "conflicts": conflicts,
         "physicalOnlyTargets": physical_only,
         "deferredDynamicTargets": deferred_dynamic,
         "reviewReasons": sorted(set(review_reasons)),
     }
-    route_id = f"sha256:{_canonical_hash(semantic)}"
+    route_id = f"sha256:{_canonical_hash(route_semantic)}"
     operation_count = sum(
         int(document.get("operationCount") or 0)
         for document in documents.values()
@@ -712,10 +716,25 @@ def build_route_plan(
     return payload
 
 
+def _route_semantic_documents(documents: Any) -> dict[str, Any]:
+    if not isinstance(documents, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for source_xml, document in documents.items():
+        if not isinstance(document, dict):
+            continue
+        result[str(source_xml)] = {
+            key: copy.deepcopy(value)
+            for key, value in document.items()
+            if key != "sourcePath"
+        }
+    return result
+
+
 def _recompute_route_id(plan: dict[str, Any]) -> str:
     semantic = {
         "fontPlanId": plan.get("fontPlanId"),
-        "documents": plan.get("documents"),
+        "documents": _route_semantic_documents(plan.get("documents")),
         "unresolved": plan.get("unresolved"),
         "conflicts": plan.get("conflicts"),
         "physicalOnlyTargets": plan.get("physicalOnlyTargets"),

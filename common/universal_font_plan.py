@@ -285,7 +285,7 @@ def _candidate_score(
     slot: dict[str, Any],
     target_weight: int,
     target_italic: bool,
-) -> tuple[tuple[float, float, float, str, int], dict[str, Any]] | None:
+) -> tuple[tuple[float, float, float, float, str, int], dict[str, Any]] | None:
     compatible, reasons = _face_meets_role(face, role, slot)
     if not compatible:
         return None
@@ -295,6 +295,15 @@ def _candidate_score(
     italic_penalty = 0.0 if source_italic == target_italic else 10000.0
     weight_distance, weight_mode = _weight_distance(face, target_weight)
     web_penalty = 5000.0 if face.get("_conversionRequired") is True else 0.0
+    source_weight = _int(style.get("weight"), 400) or 400
+    if weight_mode == "static" and source_weight == target_weight:
+        source_mode_penalty = 0.0
+    elif weight_mode == "variable-in-range":
+        source_mode_penalty = 1.0
+    elif weight_mode == "static":
+        source_mode_penalty = 2.0
+    else:
+        source_mode_penalty = 3.0
 
     caps = _face_capabilities(face)
     role_bonus = 0.0
@@ -309,6 +318,7 @@ def _candidate_score(
         italic_penalty,
         web_penalty,
         max(0.0, weight_distance + role_bonus),
+        source_mode_penalty,
         uid,
         index,
     )
@@ -328,7 +338,7 @@ def _select_face(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     target_weight = _target_weight(slot)
     target_italic = _target_italic(slot)
-    ranked: list[tuple[tuple[float, float, float, str, int], dict[str, Any], dict[str, Any]]] = []
+    ranked: list[tuple[tuple[float, float, float, float, str, int], dict[str, Any], dict[str, Any]]] = []
     rejected: dict[str, int] = {}
 
     for face in faces:

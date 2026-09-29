@@ -71,6 +71,8 @@ _topology_refresh() {
     _tf_tmp="$CONFIG_DIR/.font-manager-dump.$$"
     _topology_font_manager_dump "$_tf_tmp" >/dev/null 2>&1 || true
     set -- "$SCRIPT" --inventory "$INVENTORY" --output "$OUTPUT"
+    [ -s "$CONFIG_DIR/device_font_candidates.json" ] && \
+        set -- "$@" --candidates "$CONFIG_DIR/device_font_candidates.json"
     [ -s "$_tf_tmp" ] && set -- "$@" --font-manager-dump "$_tf_tmp"
     [ -f /data/fonts/config/config.xml ] && set -- "$@" --data-fonts-config /data/fonts/config/config.xml
     [ -d /data/fonts/files ] && set -- "$@" --data-fonts-dir /data/fonts/files

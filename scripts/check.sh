@@ -31,6 +31,7 @@ python3 -m py_compile \
   "$ROOT/common/font_import_probe.py" \
   "$ROOT/common/font_source_profile.py" \
   "$ROOT/common/font_web_convert.py" \
+  "$ROOT/common/universal_font_plan.py" \
   "$ROOT/common/font_inventory.py"
 
 # App-only 活跃源码清单。WebUI 前端及其准备脚本必须彻底不存在。
@@ -38,7 +39,7 @@ for file in \
   module.prop customize.sh post-fs-data.sh post-mount.sh boot-completed.sh service.sh uninstall.sh action.sh \
   README.md LICENSE NOTICE.md THIRD_PARTY_NOTICES.md CHANGELOG.md SECURITY.md CONTRIBUTING.md \
   common/composite_font.py common/font_instance.py common/font_metrics_normalize.py common/font_coverage.py common/font_axis_info.py \
-  common/font_role_check.py common/font_metadata.py common/font_extract_faces.py common/font_import_probe.py common/font_source_profile.py common/font_source_profile.sh common/font_web_convert.py common/font_inventory.py \
+  common/font_role_check.py common/font_metadata.py common/font_extract_faces.py common/font_import_probe.py common/font_source_profile.py common/font_source_profile.sh common/font_web_convert.py common/universal_font_plan.py common/universal_font_plan.sh common/font_inventory.py \
   common/font_role_check.sh common/native_import.sh common/font_details.sh common/luoshu_cli.sh \
   common/luoshu_composite.sh common/font_mix.sh common/font_mix_controller.sh common/weighted_mix_task.sh \
   common/multiweight_mix_task.sh common/mix_weight_mode.sh \
@@ -47,7 +48,7 @@ for file in \
   common/mount_compat.sh common/rom_adapters.sh common/hyperos_global.sh common/util_functions.sh \
   scripts/assert.sh scripts/module_layout_test.sh scripts/duplicate_function_test.sh scripts/device_font_cache_budget_test.sh scripts/provider_pid_scan_test.sh scripts/build.sh scripts/version.sh scripts/module_payload_manifest.txt scripts/prepare_composite_runtime.sh scripts/mount_compat_test.sh scripts/customize_reenable_test.sh \
   scripts/device_validation_gate.py scripts/device_validation_gate_test.py docs/device_validation.json \
-  scripts/stability_test.sh scripts/legacy_switch_core_test.sh scripts/native_zip_import_test.sh scripts/native_preview_source_test.sh scripts/font_source_profile_test.py scripts/font_source_profile_bridge_test.sh scripts/app_bridge_status_test.sh scripts/font_boot_state_test.sh \
+  scripts/stability_test.sh scripts/legacy_switch_core_test.sh scripts/native_zip_import_test.sh scripts/native_preview_source_test.sh scripts/font_source_profile_test.py scripts/font_source_profile_bridge_test.sh scripts/universal_font_plan_test.py scripts/universal_font_plan_bridge_test.sh scripts/app_bridge_status_test.sh scripts/font_boot_state_test.sh \
   scripts/font_library_cache_test.sh scripts/app_installer_test.sh scripts/hyperos_global_mapping_test.sh scripts/coloros_consistency_mapping_test.sh scripts/font_config_variable_weight_test.sh scripts/font_metrics_normalization_test.py scripts/font_config_monospace_test.py \
   scripts/auto_multiweight_mode_test.sh scripts/auto_multiweight_engine_test.sh scripts/mix_finalize_performance_test.sh scripts/font_library_ui_layout_test.sh scripts/v2_source_audit.sh \
   docs/RELEASING.md docs/TEST_MATRIX.md \
@@ -150,6 +151,7 @@ grep -q 'font_extract_faces.py' "$ROOT/common/native_import.sh"
 grep -q 'font_web_convert.py' "$ROOT/common/native_import.sh"
 grep -q 'woff|woff2)' "$ROOT/common/native_import.sh"
 grep -q 'source_profile)' "$ROOT/common/app_bridge.sh"
+grep -q 'universal_plan)' "$ROOT/common/app_bridge.sh"
 grep -q 'font_check_cli' "$ROOT/common/font_check.sh"
 grep -q 'source 时，必须只定义函数' "$ROOT/common/font_check.sh"
 grep -q 'instantiateVariableFont' "$ROOT/common/font_instance.py"
@@ -267,6 +269,8 @@ FONT_INVENTORY_TEST_FONT=$(find /usr/share/fonts -type f -iname 'DejaVuSans.ttf'
 [ -s "$FONT_INVENTORY_TEST_FONT" ]
 python3 "$ROOT/scripts/font_source_profile_test.py" --font "$FONT_INVENTORY_TEST_FONT"
 sh "$ROOT/scripts/font_source_profile_bridge_test.sh" "$FONT_INVENTORY_TEST_FONT"
+python3 "$ROOT/scripts/universal_font_plan_test.py"
+sh "$ROOT/scripts/universal_font_plan_bridge_test.sh"
 python3 "$ROOT/scripts/font_inventory_test.py" --font "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/stock_metric_contract_test.py"
 python3 "$ROOT/scripts/font_inventory_symlink_test.py"

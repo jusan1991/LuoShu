@@ -1,0 +1,176 @@
+#!/system/bin/sh
+# Phase 7 unified mount runtime for Magisk / KernelSU / APatch.
+# One payload, one transaction; Root manager changes only the hook stage.
+set +e
+
+MODDIR="${MODDIR:-${MODULE_DIR:-/data/adb/modules/LuoShu}}"
+MODULE_DIR="$MODDIR"
+CONFIG_DIR="${CONFIG_DIR:-$MODDIR/config}"
+PAYLOAD="$MODDIR/.luoshu-payload"
+RUNTIME_CONF="$CONFIG_DIR/universal-font-runtime.conf"
+MOUNT_STATE="$CONFIG_DIR/universal-font-mount.conf"
+STATE_ROOT="${LUOSHU_UNIVERSAL_MOUNT_STATE_ROOT:-/data/adb/luoshu/universal-mount}"
+DYNAMIC_LIST="$STATE_ROOT/dynamic.mounts"
+
+[ -f "$MODDIR/common/private_payload.sh" ] && . "$MODDIR/common/private_payload.sh"
+[ -f "$MODDIR/common/util_functions.sh" ] && . "$MODDIR/common/util_functions.sh"
+[ -f "$MODDIR/common/font_config_runtime.sh" ] && . "$MODDIR/common/font_config_runtime.sh"
+[ -f "$MODDIR/common/font_config_partitions.sh" ] && . "$MODDIR/common/font_config_partitions.sh"
+[ -f "$MODDIR/common/mount_compat.sh" ] && . "$MODDIR/common/mount_compat.sh"
+[ -f "$MODDIR/common/mount_self_backend.sh" ] && . "$MODDIR/common/mount_self_backend.sh"
+
+_ufmr_log() {
+    mkdir -p "$MODDIR/logs" 2>/dev/null || true
+    printf '[%s] [UNIVERSAL-MOUNT] %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)" "$*" >> "$MODDIR/logs/universal-mount.log" 2>/dev/null || true
+}
+
+_ufmr_value() {
+    sed -n "s/^${2}=//p" "$1" 2>/dev/null | head -n1 | tr -d '\r\n'
+}
+
+_ufmr_hash() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v busybox >/dev/null 2>&1; then
+        busybox sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
+_ufmr_mount() {
+    if [ -n "${LUOSHU_UNIVERSAL_MOUNT_COMMAND:-}" ]; then
+        "$LUOSHU_UNIVERSAL_MOUNT_COMMAND" "$@"
+    elif type _luoshu_mount_cmd >/dev/null 2>&1; then
+        _luoshu_mount_cmd "$@"
+    else
+        mount "$@"
+    fi
+}
+
+_ufmr_umount() {
+    if [ -n "${LUOSHU_UNIVERSAL_UMOUNT_COMMAND:-}" ]; then
+        "$LUOSHU_UNIVERSAL_UMOUNT_COMMAND" "$@"
+    elif type _luoshu_umount_cmd >/dev/null 2>&1; then
+        _luoshu_umount_cmd "$@"
+    else
+        umount "$@"
+    fi
+}
+
+_ufmr_is_mounted() {
+    _ufmr_target="$1"
+    _ufmr_mountinfo="${LUOSHU_UNIVERSAL_MOUNTINFO:-/proc/self/mountinfo}"
+    awk -v path="$_ufmr_target" '$5 == path {found=1} END {exit !found}' "$_ufmr_mountinfo" 2>/dev/null
+}
+
+_ufmr_rollback_dynamic() {
+    [ -s "$DYNAMIC_LIST" ] || return 0
+    awk '{item[NR]=$0} END {for(i=NR;i>=1;i--) print item[i]}' "$DYNAMIC_LIST" 2>/dev/null | while IFS= read -r _ufmr_target; do
+        [ -n "$_ufmr_target" ] || continue
+        case "$_ufmr_target" in /data/fonts/*) _ufmr_umount "$_ufmr_target" >/dev/null 2>&1 || true ;; esac
+    done
+    : > "$DYNAMIC_LIST" 2>/dev/null || true
+}
+
+_ufmr_apply_dynamic() {
+    _ufmr_conf="$PAYLOAD/.luoshu-runtime/deployment/dynamic-mounts.conf"
+    mkdir -p "$STATE_ROOT" 2>/dev/null || return 1
+    : > "$DYNAMIC_LIST" 2>/dev/null || return 1
+    [ -s "$_ufmr_conf" ] || return 0
+    while IFS='|' read -r _ufmr_source_rel _ufmr_target _ufmr_expected; do
+        [ -n "$_ufmr_source_rel" ] && [ -n "$_ufmr_target" ] && [ -n "$_ufmr_expected" ] || continue
+        case "$_ufmr_source_rel" in .luoshu-dynamic/*) ;; *) return 1 ;; esac
+        case "$_ufmr_target" in /data/fonts/*) ;; *) return 1 ;; esac
+        _ufmr_source="$PAYLOAD/$_ufmr_source_rel"
+        [ -f "$_ufmr_source" ] && [ -f "$_ufmr_target" ] || return 1
+        [ "$(_ufmr_hash "$_ufmr_source")" = "$_ufmr_expected" ] || return 1
+        if _ufmr_is_mounted "$_ufmr_target"; then
+            [ "$(_ufmr_hash "$_ufmr_target")" = "$_ufmr_expected" ] || return 1
+            printf '%s\n' "$_ufmr_target" >> "$DYNAMIC_LIST"
+            continue
+        fi
+        _ufmr_mount --bind "$_ufmr_source" "$_ufmr_target" >/dev/null 2>&1 || \
+            _ufmr_mount -o bind "$_ufmr_source" "$_ufmr_target" >/dev/null 2>&1 || return 1
+        _ufmr_mount -o remount,bind,ro "$_ufmr_target" >/dev/null 2>&1 || \
+            _ufmr_mount -o bind,remount,ro "$_ufmr_target" >/dev/null 2>&1 || true
+        [ "$(_ufmr_hash "$_ufmr_target")" = "$_ufmr_expected" ] || {
+            _ufmr_umount "$_ufmr_target" >/dev/null 2>&1 || true
+            return 1
+        }
+        printf '%s\n' "$_ufmr_target" >> "$DYNAMIC_LIST" || return 1
+    done < "$_ufmr_conf"
+    return 0
+}
+
+_ufmr_rollback_system() {
+    if type _luoshu_atomic_rollback >/dev/null 2>&1 && type _luoshu_self_state_root >/dev/null 2>&1; then
+        _ufmr_system_list="$(_luoshu_self_state_root)/mounts.list"
+        _luoshu_atomic_rollback "$_ufmr_system_list" >/dev/null 2>&1 || true
+    fi
+}
+
+_ufmr_write_state() {
+    _ufmr_state="$1"; _ufmr_manager="$2"; _ufmr_stage="$3"; _ufmr_dynamic="$4"; _ufmr_error="$5"
+    mkdir -p "$CONFIG_DIR" 2>/dev/null || true
+    _ufmr_id=$(_ufmr_value "$RUNTIME_CONF" deploymentId)
+    _ufmr_digest=$(_ufmr_value "$RUNTIME_CONF" payloadDigest)
+    {
+        printf 'state=%s\n' "$_ufmr_state"
+        printf 'backend=self-mount\n'
+        printf 'manager=%s\n' "$_ufmr_manager"
+        printf 'stage=%s\n' "$_ufmr_stage"
+        printf 'deploymentId=%s\n' "$_ufmr_id"
+        printf 'payloadDigest=%s\n' "$_ufmr_digest"
+        printf 'dynamicMounted=%s\n' "$_ufmr_dynamic"
+        printf 'error=%s\n' "$_ufmr_error"
+        printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+    } > "$MOUNT_STATE.tmp.$$" 2>/dev/null && mv -f "$MOUNT_STATE.tmp.$$" "$MOUNT_STATE" 2>/dev/null || true
+}
+
+universal_font_mount_hook() {
+    _ufmr_hook="$1"
+    [ -s "$RUNTIME_CONF" ] || return 2
+    [ "$(_ufmr_value "$RUNTIME_CONF" state)" = active ] || return 2
+    [ "$(_ufmr_value "$RUNTIME_CONF" pipeline)" = universal-font-deployment-v1 ] || return 1
+    [ -d "$PAYLOAD" ] || return 1
+    [ -s "$PAYLOAD/.luoshu-runtime/deployment/deployment.json" ] || return 1
+    type luoshu_detect_root_manager >/dev/null 2>&1 || return 1
+    type luoshu_self_mount_stage_for_manager >/dev/null 2>&1 || return 1
+    type luoshu_private_self_mount_ensure >/dev/null 2>&1 || return 1
+
+    _ufmr_manager=$(luoshu_detect_root_manager 2>/dev/null | head -n1)
+    _ufmr_stage=$(luoshu_self_mount_stage_for_manager "$_ufmr_manager" 2>/dev/null)
+    [ "$_ufmr_stage" = "$_ufmr_hook" ] || return 2
+
+    if ! luoshu_private_self_mount_ensure >/dev/null 2>&1; then
+        _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 system-mount-failed
+        _ufmr_log "system payload mount failed manager=$_ufmr_manager stage=$_ufmr_stage"
+        return 1
+    fi
+
+    if ! _ufmr_apply_dynamic; then
+        _ufmr_rollback_dynamic
+        _ufmr_rollback_system
+        type _luoshu_self_state_write >/dev/null 2>&1 && _luoshu_self_state_write failed rollback '' dynamic-mount-failed
+        _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 dynamic-mount-failed
+        _ufmr_log "dynamic mount failed; system payload rolled back"
+        return 1
+    fi
+    _ufmr_dynamic_count=$(wc -l < "$DYNAMIC_LIST" 2>/dev/null | tr -d '[:space:]')
+    case "$_ufmr_dynamic_count" in ''|*[!0-9]*) _ufmr_dynamic_count=0 ;; esac
+    _ufmr_write_state mounted "$_ufmr_manager" "$_ufmr_stage" "$_ufmr_dynamic_count" ''
+    _ufmr_log "mounted deployment=$(_ufmr_value "$RUNTIME_CONF" deploymentId) manager=$_ufmr_manager stage=$_ufmr_stage dynamic=$_ufmr_dynamic_count"
+    return 0
+}
+
+case "${1:-hook}" in
+    hook) universal_font_mount_hook "${2:-post-fs-data}" ;;
+    service) exit 0 ;;
+    rollback)
+        _ufmr_rollback_dynamic
+        _ufmr_rollback_system
+        _ufmr_write_state rolled-back "$(type luoshu_detect_root_manager >/dev/null 2>&1 && luoshu_detect_root_manager || echo unknown)" manual 0 manual
+        ;;
+    *) echo "Usage: $0 {hook <post-fs-data|post-mount>|service|rollback}" >&2; exit 2 ;;
+esac

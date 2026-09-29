@@ -18,6 +18,10 @@ _ufnb_log() {
 }
 
 _ufnb_python() {
+    if [ -n "${LUOSHU_PYTHON:-}" ]; then
+        "$LUOSHU_PYTHON" "$@"
+        return $?
+    fi
     _ufnb_mod=$(_ufnb_module)
     _ufnb_root="$_ufnb_mod/common/python"
     _ufnb_bin="$_ufnb_root/bin/luoshu-python"

@@ -109,7 +109,7 @@ Shadow 动作：
 - 第二阶段不允许实际写入字体或 XML
 
 ### Phase 3 — Imported Font Analyzer / Compiler Input
-状态：未开始
+状态：**进行中 / source-font-profile-v1**
 
 目标：
 
@@ -136,6 +136,13 @@ Shadow 动作：
 - 字重
 - 度量
 - 字体角色适配能力
+
+标准产物：
+
+- `config/source-font-profiles/*.json`
+- Schema：`source-font-profile-v1`
+- WOFF/WOFF2 必须先通过 `font_web_convert.py` 解包为真实 SFNT，禁止仅改扩展名
+- Phase 4 只能消费 Source Profile，不得重新散读多个旧探测器
 
 ### Phase 4 — Universal Replacement Planner
 状态：未开始

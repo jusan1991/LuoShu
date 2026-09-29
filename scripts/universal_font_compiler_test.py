@@ -328,7 +328,7 @@ def main() -> int:
         face1 = temp / "Face1.ttf"
         collection = temp / "ClockCollection.ttc"
         make_font(face0, family="Untouched Face", advance=500)
-        make_font(face1, family="Clock Face", advance=810, y_min=-100, y_max=700)
+        make_font(face1, family="Clock Face", advance=760, y_min=-100, y_max=700)
         make_collection(collection, face0, face1)
         ttc_xml = temp / "ttc.xml"
         ttc_xml.write_text(

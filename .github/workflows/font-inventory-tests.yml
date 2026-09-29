@@ -13,6 +13,8 @@ on:
       - common/font_source_profile.py
       - common/font_source_profile.sh
       - common/font_web_convert.py
+      - common/universal_font_plan.py
+      - common/universal_font_plan.sh
       - common/stock_inventory_scan.py
       - common/font_manager.sh
       - common/font_metrics_normalize.py
@@ -26,6 +28,8 @@ on:
       - scripts/font_role_shadow_test.py
       - scripts/font_source_profile_test.py
       - scripts/font_source_profile_bridge_test.sh
+      - scripts/universal_font_plan_test.py
+      - scripts/universal_font_plan_bridge_test.sh
       - scripts/stock_inventory_scan_wrapper_test.py
       - scripts/rom_adapter_inventory_test.sh
       - scripts/font_metrics_normalization_test.py
@@ -46,7 +50,7 @@ jobs:
       - name: Validate inventory scanners and runtime mapper
         run: |
           set -eu
-          python3 -m py_compile common/font_inventory.py common/font_inventory_scan.py common/font_topology_snapshot.py common/font_role_shadow.py common/font_source_profile.py common/font_web_convert.py common/stock_inventory_scan.py common/font_metrics_normalize.py
+          python3 -m py_compile common/font_inventory.py common/font_inventory_scan.py common/font_topology_snapshot.py common/font_role_shadow.py common/font_source_profile.py common/font_web_convert.py common/universal_font_plan.py common/stock_inventory_scan.py common/font_metrics_normalize.py
           FONT="$(find /usr/share/fonts -type f -iname 'DejaVuSans.ttf' -print -quit)"
           test -s "$FONT"
           python3 scripts/font_inventory_test.py --font "$FONT"
@@ -55,6 +59,8 @@ jobs:
           python3 scripts/font_role_shadow_test.py
           python3 scripts/font_source_profile_test.py --font "$FONT"
           sh scripts/font_source_profile_bridge_test.sh "$FONT"
+          python3 scripts/universal_font_plan_test.py
+          sh scripts/universal_font_plan_bridge_test.sh
           python3 scripts/stock_inventory_scan_wrapper_test.py
           sh scripts/rom_adapter_inventory_test.sh "$FONT"
           python3 scripts/font_metrics_normalization_test.py
@@ -68,6 +74,7 @@ jobs:
           sh -n common/font_topology_snapshot.sh
           sh -n common/font_role_shadow.sh
           sh -n common/font_source_profile.sh
+          sh -n common/universal_font_plan.sh
           sh -n common/device_font_payload_policy.sh
           sh -n common/font_manager.sh
           grep -q 'luoshu_private_install_migrate' customize.sh
@@ -92,5 +99,7 @@ jobs:
           grep -qx 'common/font_source_profile.py' scripts/module_payload_manifest.txt
           grep -qx 'common/font_source_profile.sh' scripts/module_payload_manifest.txt
           grep -qx 'common/font_web_convert.py' scripts/module_payload_manifest.txt
+          grep -qx 'common/universal_font_plan.py' scripts/module_payload_manifest.txt
+          grep -qx 'common/universal_font_plan.sh' scripts/module_payload_manifest.txt
           grep -qx 'common/stock_inventory_scan.py' scripts/module_payload_manifest.txt
           grep -qx '.luoshu-runtime' scripts/module_payload_manifest.txt

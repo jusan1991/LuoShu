@@ -5,6 +5,8 @@
 # App font inventory remains prewarmed through config/native_font_index.json.
 set +e
 MODDIR="${0%/*}"
+UNIVERSAL_MODE="$MODDIR/config/universal-font-runtime.conf"
+UNIVERSAL_RUNTIME="$MODDIR/common/universal_mount_runtime.sh"
 LEGACY_MODE="$MODDIR/config/font_runtime_legacy_v14_4.conf"
 V4_SERVICE="$MODDIR/.luoshu-runtime/core/service.sh"
 
@@ -15,6 +17,12 @@ if [ -f "$MODDIR/common/google_font_provider_service.sh" ]; then
         MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
             sh "$MODDIR/common/google_font_provider_service.sh" boot
     ) </dev/null >/dev/null 2>&1 &
+fi
+
+if [ -s "$UNIVERSAL_MODE" ]; then
+    [ -f "$UNIVERSAL_RUNTIME" ] && MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
+        sh "$UNIVERSAL_RUNTIME" service >/dev/null 2>&1 || true
+    exit 0
 fi
 
 if [ ! -f "$LEGACY_MODE" ]; then

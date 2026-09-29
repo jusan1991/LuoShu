@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -1613,7 +1614,11 @@ def compile_all(
     ready = sum(item["status"] == "ready" for item in artifacts)
     blocked = sum(item["status"] == "blocked" for item in artifacts)
     deferred = list(route_plan.get("deferredDynamicTargets") or [])
-    deployment_ready = blocked == 0 and route_plan.get("summary", {}).get("routingComplete") is True
+    deployment_ready = (
+        blocked == 0
+        and not deferred
+        and route_plan.get("summary", {}).get("routingComplete") is True
+    )
     semantic = {
         "fontPlanId": font_plan.get("planId"),
         "routeId": route_plan.get("routeId"),
@@ -1621,7 +1626,7 @@ def compile_all(
             {
                 key: value
                 for key, value in item.items()
-                if key not in {"output", "stock"} or key == "output"
+                if key not in {"output", "stock"}
             }
             for item in artifacts
         ],
@@ -1698,7 +1703,11 @@ def validate_manifest(
         "readyCount": ready,
         "blockedCount": blocked,
         "deferredDynamicTargetCount": len(manifest.get("deferredDynamicTargets") or []),
-        "deploymentReady": blocked == 0 and route_plan.get("summary", {}).get("routingComplete") is True,
+        "deploymentReady": (
+            blocked == 0
+            and not (manifest.get("deferredDynamicTargets") or [])
+            and route_plan.get("summary", {}).get("routingComplete") is True
+        ),
         "executableNow": False,
     }
     if summary != expected:

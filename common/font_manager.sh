@@ -24,6 +24,7 @@ PYBIN="$PYROOT/bin/luoshu-python"
 STOCK_SCANNER="$MODDIR/common/stock_inventory_scan.py"
 STOCK_INVENTORY="$MODDIR/config/device_font_inventory.json"
 STOCK_SCAN_LOCK="$MODDIR/.stock-inventory-scan.lock"
+TOPOLOGY_COLLECTOR="$MODDIR/common/font_topology_snapshot.sh"
 export MODDIR LUOSHU_PUBLIC_DIR
 
 json_escape_router() {
@@ -32,6 +33,12 @@ json_escape_router() {
 
 stock_scan_available() {
     [ -x "$PYBIN" ] && [ -f "$STOCK_SCANNER" ] && [ -f "$MODDIR/common/font_inventory.py" ] && [ -f "$MODDIR/common/font_check.sh" ]
+}
+
+stock_topology_refresh() {
+    [ -f "$TOPOLOGY_COLLECTOR" ] && [ -s "$STOCK_INVENTORY" ] || return 0
+    MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
+        sh "$TOPOLOGY_COLLECTOR" refresh >>"$MODDIR/logs/font-topology.log" 2>&1 || true
 }
 
 stock_scan_lock_acquire() {
@@ -95,6 +102,7 @@ stock_scan_json() {
             rm -f "$MODDIR/config/stock_inventory_scan_pending" 2>/dev/null || true
             stock_scan_lock_release
             trap - EXIT HUP INT TERM
+            stock_topology_refresh
             printf '%s\n' "$(printf '%s\n' "$_stock_out" | tail -n1)"
             return 0
         fi
@@ -115,6 +123,7 @@ stock_scan_json() {
         rm -f "$MODDIR/config/stock_inventory_scan_pending" 2>/dev/null || true
         stock_scan_lock_release
         trap - EXIT HUP INT TERM
+        stock_topology_refresh
         printf '%s\n' "$_stock_last"
         return 0
     fi

@@ -974,13 +974,15 @@ def _collect_units(font_plan: dict[str, Any], route_plan: dict[str, Any]) -> lis
             })
 
     deferred = set(route_plan.get("deferredDynamicTargets") or [])
-    for target_path, target in sorted(targets.items()):
+    physical_only = set(route_plan.get("physicalOnlyTargets") or [])
+    for target_path in sorted(physical_only):
+        target = targets.get(target_path)
         if not isinstance(target, dict):
-            continue
+            raise CompilerError(f"RoutePlan physicalOnly target 不存在于 FontPlan：{target_path}")
         if str(target.get("action") or "") not in ROUTABLE_ACTIONS:
-            continue
+            raise CompilerError(f"RoutePlan physicalOnly target 不是可编译目标：{target_path}")
         if target_path.startswith("/data/fonts/") or target_path in deferred:
-            continue
+            raise CompilerError(f"动态字体目标不得作为 physical-only artifact：{target_path}")
         artifact = _physical_artifact(target, font_plan)
         artifact_id = str(artifact["artifactId"])
         unit = units.setdefault(artifact_id, {

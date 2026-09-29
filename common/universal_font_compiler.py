@@ -1633,6 +1633,16 @@ def compile_all(
         "deferredDynamicTargets": deferred,
     }
     manifest_id = f"sha256:{_canonical_hash(semantic)}"
+    artifact_map = {
+        str(item["artifactId"]): Path(str(item["output"])).name
+        for item in artifacts
+        if item.get("status") == "ready"
+    }
+    physical_target_map = {
+        str(item["targetPath"]): str(item["artifactId"])
+        for item in artifacts
+        if item.get("status") == "ready" and "physical-slot" in (item.get("deploymentKinds") or [])
+    }
     return {
         "schema": SCHEMA,
         "compilerRevision": COMPILER_REVISION,
@@ -1651,6 +1661,8 @@ def compile_all(
             "executableNow": False,
         },
         "deferredDynamicTargets": deferred,
+        "artifactMap": dict(sorted(artifact_map.items())),
+        "physicalTargetMap": dict(sorted(physical_target_map.items())),
         "artifacts": artifacts,
     }
 
@@ -1676,7 +1688,13 @@ def validate_manifest(
         raise CompilerError("Artifact manifest 缺少 summary/artifacts")
     if summary.get("executableNow") is not False:
         raise CompilerError("Phase 6 不得声明可直接执行")
+    artifact_map = manifest.get("artifactMap")
+    physical_map = manifest.get("physicalTargetMap")
+    if not isinstance(artifact_map, dict) or not isinstance(physical_map, dict):
+        raise CompilerError("Artifact manifest 缺少 artifactMap/physicalTargetMap")
     ids: set[str] = set()
+    expected_artifact_map: dict[str, str] = {}
+    expected_physical_map: dict[str, str] = {}
     ready = blocked = 0
     for artifact in artifacts:
         if not isinstance(artifact, dict):
@@ -1691,6 +1709,9 @@ def validate_manifest(
             path = Path(str(artifact.get("output") or ""))
             if not path.is_file() or _sha256(path) != artifact.get("sha256"):
                 raise CompilerError(f"Artifact 文件缺失或摘要不一致：{artifact_id}")
+            expected_artifact_map[artifact_id] = path.name
+            if "physical-slot" in (artifact.get("deploymentKinds") or []):
+                expected_physical_map[str(artifact.get("targetPath") or "")] = artifact_id
         elif status == "blocked":
             blocked += 1
             if not str(artifact.get("reason") or ""):
@@ -1712,6 +1733,10 @@ def validate_manifest(
     }
     if summary != expected:
         raise CompilerError("Artifact manifest summary 与 artifacts 不一致")
+    if artifact_map != dict(sorted(expected_artifact_map.items())):
+        raise CompilerError("Artifact manifest artifactMap 与 ready artifacts 不一致")
+    if physical_map != dict(sorted(expected_physical_map.items())):
+        raise CompilerError("Artifact manifest physicalTargetMap 与 ready artifacts 不一致")
 
 
 def main() -> int:

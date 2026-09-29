@@ -171,7 +171,7 @@ Shadow 动作：
 - 风险与回退方案
 
 ### Phase 5 — Minimal XML Router
-状态：未开始
+状态：**进行中 / minimal-xml-route-plan-v1**
 
 目标：
 
@@ -190,6 +190,18 @@ Shadow 动作：
 - 删除未知 OEM family
 - 打乱 fallback 顺序
 - 丢失 lang / variant / fallbackFor / axis 等属性
+
+标准产物：
+
+- `config/minimal-xml-route-plans/*.json`
+- Schema：`minimal-xml-route-plan-v1`
+- 只允许消费已经通过完整性校验的 `universal-font-plan-v1`
+- 只按 `sourceXml + family + weight + style + index + declared + postScriptName` 精确定位原厂节点
+- 找不到唯一节点、原厂快照缺失、同一节点发生 artifact 冲突时必须 fail-closed，禁止部分 XML 渲染
+- 允许的 XML 变化只有目标 `<font>` 的文本引用；family/family-list/alias/fallback 顺序、全部属性、TTC index、postScriptName、axis 子节点必须保持
+- XML 原有 index/axis/postScriptName 不再被删除，转成 Phase 6 的 artifact contract，由编译器满足
+- `/data/fonts` 动态层只标记 deferred，不在 Phase 5 修改
+- Phase 5 不发布系统 XML、不 mount，仍强制 `mutatesSystem=false`、`executableNow=false`
 
 ### Phase 6 — Metrics / Variable Font Compiler
 状态：未开始

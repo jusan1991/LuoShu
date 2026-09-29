@@ -1707,7 +1707,7 @@ def compile_all(
     }
     deployment_ready = (
         blocked == 0
-        and compiled_dynamic == deferred
+        and compiled_dynamic == set(deferred)
         and route_plan.get("summary", {}).get("routingComplete") is True
     )
     manifest_id = _manifest_id(

@@ -17,7 +17,7 @@ MIX_ENGINE="$MODDIR/common/font_mix_controller.sh"
 NATIVE_IMPORT="$MODDIR/common/native_import.sh"
 AXIS_INFO="$MODDIR/common/font_axis_info.py"
 SOURCE_PROFILE="$MODDIR/common/font_source_profile.sh"
-PYROOT="$MODDIR/common/python"
+UNIVERSAL_PLAN="$MODDIR/common/universal_font_plan.sh"\nPYROOT="$MODDIR/common/python"
 PYBIN="$PYROOT/bin/luoshu-python"
 USER_FONTS_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}/fonts"
 AXES_TASK_FILE="$MODDIR/config/axes_task.conf"
@@ -321,6 +321,10 @@ case "${1:-status}" in
     source_profile)
         [ -f "$SOURCE_PROFILE" ] || { printf '{"status":"error","message":"源字体 Profile 组件不可用"}\n'; exit 1; }
         MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$SOURCE_PROFILE" family "${2:-}"
+        ;;
+    universal_plan)
+        [ -f "$UNIVERSAL_PLAN" ] || { printf '{"status":"error","message":"Universal FontPlan 组件不可用"}\n'; exit 1; }
+        MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$UNIVERSAL_PLAN" build "${2:-}"
         ;;
     prewarm)
         if [ -f "$SAFE_SWITCH" ]; then

@@ -26,6 +26,7 @@ def main() -> int:
         temp = Path(directory)
         inventory = temp / "device_font_inventory.json"
         output = temp / "device_font_topology.json"
+        candidates = temp / "device_font_candidates.json"
         dump = temp / "font-manager.txt"
         mountinfo = temp / "mountinfo.txt"
         data_config = temp / "config.xml"
@@ -37,7 +38,7 @@ def main() -> int:
                 {
                     "schema": "device-font-inventory-v1",
                     "inventoryRevision": 1,
-                    "scannerRevision": 4,
+                    "scannerRevision": 5,
                     "state": "ready",
                     "buildKey": "topology-test-build",
                     "romKind": "hyperos",
@@ -48,6 +49,74 @@ def main() -> int:
                     "families": {
                         "sans-serif": ["/system/fonts/Roboto-Regular.ttf"],
                         "sans-serif-condensed": ["/product/fonts/UiCondensed.ttf"],
+                        "emoji": ["/system/fonts/NotoColorEmoji.ttf"],
+                        "fallback-japanese": ["/product/fonts/NotoSansJP-Regular.otf"],
+                    },
+                    "xmlGraph": {
+                        "schema": "device-font-xml-graph-v1",
+                        "refCount": 4,
+                        "aliasCount": 1,
+                        "refs": [
+                            {
+                                "sourceXml": "/system/etc/fonts.xml",
+                                "sourcePartition": "system",
+                                "family": "sans-serif",
+                                "familyNormalized": "sans-serif",
+                                "familyAttributes": {},
+                                "declared": "Roboto-Regular.ttf",
+                                "postScriptName": "",
+                                "weight": 400,
+                                "style": "normal",
+                                "index": 0,
+                                "axes": "",
+                                "resolvedPath": "/system/fonts/Roboto-Regular.ttf",
+                            },
+                            {
+                                "sourceXml": "/product/etc/fonts_customization.xml",
+                                "sourcePartition": "product",
+                                "family": "sans-serif-condensed",
+                                "familyNormalized": "sans-serif-condensed",
+                                "familyAttributes": {},
+                                "declared": "UiCondensed.ttf",
+                                "postScriptName": "",
+                                "weight": 400,
+                                "style": "normal",
+                                "index": 0,
+                                "axes": "",
+                                "resolvedPath": "/product/fonts/UiCondensed.ttf",
+                            },
+                            {
+                                "sourceXml": "/system/etc/fonts.xml",
+                                "sourcePartition": "system",
+                                "family": "emoji",
+                                "familyNormalized": "emoji",
+                                "familyAttributes": {},
+                                "declared": "NotoColorEmoji.ttf",
+                                "postScriptName": "",
+                                "weight": 400,
+                                "style": "normal",
+                                "index": 0,
+                                "axes": "",
+                                "resolvedPath": "/system/fonts/NotoColorEmoji.ttf",
+                            },
+                            {
+                                "sourceXml": "/product/etc/fonts_customization.xml",
+                                "sourcePartition": "product",
+                                "family": "fallback-japanese",
+                                "familyNormalized": "fallback-japanese",
+                                "familyAttributes": {"lang": "ja", "variant": "compact"},
+                                "declared": "NotoSansJP-Regular.otf",
+                                "postScriptName": "",
+                                "weight": 400,
+                                "style": "normal",
+                                "index": 0,
+                                "axes": "",
+                                "resolvedPath": "/product/fonts/NotoSansJP-Regular.otf",
+                            },
+                        ],
+                        "aliases": [
+                            {"sourceXml": "/system/etc/fonts.xml", "name": "sans", "to": "sans-serif"}
+                        ],
                     },
                     "slots": {
                         "/system/fonts/Roboto-Regular.ttf": {
@@ -69,6 +138,23 @@ def main() -> int:
                             "source": "verified-scan",
                         },
                     },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        candidates.write_text(
+            json.dumps(
+                {
+                    "schema": "device-font-candidates-v1",
+                    "paths": [
+                        {"path": "/system/fonts/Roboto-Regular.ttf", "partition": "system", "slotName": "Roboto-Regular.ttf", "candidate": True, "reason": "visible-font-path"},
+                        {"path": "/product/fonts/UiCondensed.ttf", "partition": "product", "slotName": "UiCondensed.ttf", "candidate": True, "reason": "visible-font-path"},
+                        {"path": "/system_ext/fonts/OemUi-Regular.ttf", "partition": "system_ext", "slotName": "OemUi-Regular.ttf", "candidate": True, "reason": "visible-font-path"},
+                        {"path": "/system/fonts/NotoColorEmoji.ttf", "partition": "system", "slotName": "NotoColorEmoji.ttf", "candidate": False, "reason": "specialized-name"},
+                        {"path": "/product/fonts/NotoSansJP-Regular.otf", "partition": "product", "slotName": "NotoSansJP-Regular.otf", "candidate": False, "reason": "specialized-name"},
+                    ],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -103,6 +189,8 @@ FontManagerService:
                 str(inventory),
                 "--output",
                 str(output),
+                "--candidates",
+                str(candidates),
                 "--font-manager-dump",
                 str(dump),
                 "--data-fonts-config",
@@ -119,15 +207,19 @@ FontManagerService:
 
         assert result["status"] == "ok"
         assert payload["schema"] == "device-font-topology-v1"
-        assert payload["topologyRevision"] == 1
+        assert payload["topologyRevision"] == 2
         assert payload["state"] == "ready"
         assert payload["buildKey"] == "topology-test-build"
         assert payload["romKind"] == "hyperos"
-        assert payload["summary"]["slotCount"] == 3
-        assert payload["summary"]["familyCount"] == 2
-        assert payload["summary"]["edgeCount"] == 2
+        assert payload["summary"]["slotCount"] == 5
+        assert payload["summary"]["legacyUiSlotCount"] == 3
+        assert payload["summary"]["physicalFontCount"] == 5
+        assert payload["summary"]["familyCount"] == 4
+        assert payload["summary"]["edgeCount"] == 4
         assert payload["summary"]["partitionCount"] == 3
         assert payload["summary"]["xmlSourceCount"] == 2
+        assert payload["summary"]["xmlRefCount"] == 4
+        assert payload["summary"]["unresolvedXmlRefCount"] == 0
         assert payload["summary"]["runtimeConfirmedSlotCount"] == 1
         assert payload["summary"]["runtimeConfirmedFamilyCount"] == 1
         assert payload["summary"]["dataFontFileCount"] == 1
@@ -143,6 +235,18 @@ FontManagerService:
         oem = payload["slots"]["/system_ext/fonts/OemUi-Regular.ttf"]
         assert oem["families"] == []
         assert oem["runtimeEvidence"]["fontManager"] is False
+
+        emoji = payload["slots"]["/system/fonts/NotoColorEmoji.ttf"]
+        assert emoji["families"] == ["emoji"]
+        assert emoji["source"] == "physical-scan"
+        assert emoji["physicalCandidate"] is False
+        assert emoji["xmlRefs"][0]["family"] == "emoji"
+
+        japanese = payload["slots"]["/product/fonts/NotoSansJP-Regular.otf"]
+        assert japanese["families"] == ["fallback-japanese"]
+        assert japanese["xmlRefs"][0]["familyAttributes"]["lang"] == "ja"
+        assert japanese["xmlRefs"][0]["familyAttributes"]["variant"] == "compact"
+        assert payload["xmlAliases"][0]["name"] == "sans"
 
         assert payload["families"]["sans-serif"]["runtimeConfirmed"] is True
         assert payload["families"]["sans-serif-condensed"]["runtimeConfirmed"] is False

@@ -204,7 +204,7 @@ Shadow 动作：
 - Phase 5 不发布系统 XML、不 mount，仍强制 `mutatesSystem=false`、`executableNow=false`
 
 ### Phase 6 — Metrics / Variable Font Compiler
-状态：**进行中 / universal-font-artifacts-v1**
+状态：**已完成 / PR #259 / universal-font-artifacts-v1**
 
 目标：
 

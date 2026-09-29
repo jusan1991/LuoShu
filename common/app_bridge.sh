@@ -20,6 +20,7 @@ SOURCE_PROFILE="$MODDIR/common/font_source_profile.sh"
 UNIVERSAL_PLAN="$MODDIR/common/universal_font_plan.sh"
 MINIMAL_XML_ROUTER="$MODDIR/common/minimal_xml_router.sh"
 UNIVERSAL_COMPILER="$MODDIR/common/universal_font_compiler.sh"
+UNIVERSAL_DEPLOYMENT="$MODDIR/common/universal_font_deployment.sh"
 PYROOT="$MODDIR/common/python"
 PYBIN="$PYROOT/bin/luoshu-python"
 USER_FONTS_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}/fonts"
@@ -336,6 +337,10 @@ case "${1:-status}" in
     font_compile)
         [ -f "$UNIVERSAL_COMPILER" ] || { printf '{"status":"error","message":"Universal Font Compiler 组件不可用"}\n'; exit 1; }
         MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$UNIVERSAL_COMPILER" compile "${2:-}"
+        ;;
+    font_deployment)
+        [ -f "$UNIVERSAL_DEPLOYMENT" ] || { printf '{"status":"error","message":"Universal Deployment 组件不可用"}\n'; exit 1; }
+        MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$UNIVERSAL_DEPLOYMENT" prepare "${2:-}"
         ;;
     prewarm)
         if [ -f "$SAFE_SWITCH" ]; then

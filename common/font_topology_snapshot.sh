@@ -58,7 +58,8 @@ _topology_font_manager_dump() {
 }
 
 _topology_refresh() {
-    mkdir -p "$CONFIG_DIR" "$MODDIR/logs" 2>/dev/null || true\n    rm -rf "$CONFIG_DIR/universal-font-plans" 2>/dev/null || true
+    mkdir -p "$CONFIG_DIR" "$MODDIR/logs" 2>/dev/null || true
+    rm -rf "$CONFIG_DIR/universal-font-plans" 2>/dev/null || true
     [ -f "$SCRIPT" ] || {
         printf '{"status":"error","message":"缺少字体拓扑组件"}\n'
         return 1

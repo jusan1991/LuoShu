@@ -233,7 +233,7 @@ Shadow 动作：
 - 编译产物仍不得发布或 mount；Phase 6 强制 `mutatesSystem=false`、`executableNow=false`
 
 ### Phase 7 — Unified Mount Backends
-状态：**进行中 / universal-font-deployment-v1**
+状态：**已完成 / PR #260 / universal-font-deployment-v1**
 
 上层只接受同一份 `FontPlan`。
 

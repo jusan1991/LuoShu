@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,7 @@ from typing import Any, Iterable
 from fontTools.ttLib import TTCollection, TTFont
 
 import font_coverage as global_coverage
+import font_web_convert
 
 SCHEMA = "source-font-profile-v1"
 PROFILE_REVISION = 1
@@ -381,10 +383,12 @@ def _open_face(path: Path, container: str, index: int) -> TTFont:
 def _inspect_face(
     path: Path,
     file_hash: str,
-    container: str,
+    open_container: str,
+    source_container: str,
+    source_file_name: str,
     index: int,
 ) -> dict[str, Any]:
-    font = _open_face(path, container, index)
+    font = _open_face(path, open_container, index)
     try:
         family = _best_family(font)
         subfamily = _best_subfamily(font)
@@ -397,7 +401,7 @@ def _inspect_face(
         return {
             "uid": f"sha256:{file_hash}:face:{index}",
             "fileUid": f"sha256:{file_hash}",
-            "fileName": path.name,
+            "fileName": source_file_name,
             "faceIndex": index,
             "names": {
                 "family": family,
@@ -406,7 +410,7 @@ def _inspect_face(
                 "fullName": _debug_name(font, 4, family),
                 "postScriptName": _debug_name(font, 6, ""),
             },
-            "format": _font_format(font, container),
+            "format": _font_format(font, open_container),
             "style": {
                 "weight": _weight(font),
                 "widthClass": _width_class(font),
@@ -422,7 +426,7 @@ def _inspect_face(
             "tables": tables,
             "coverage": coverage,
             "capabilities": capabilities,
-            "warnings": _warnings(capabilities, tables, metrics, container),
+            "warnings": _warnings(capabilities, tables, metrics, source_container),
         }
     finally:
         font.close()
@@ -431,33 +435,67 @@ def _inspect_face(
 def _inspect_file(path: Path) -> dict[str, Any]:
     if not path.is_file() or path.stat().st_size < 12:
         raise ProfileError(f"字体文件不存在或过小：{path}")
-    container = _source_container(path)
-    if container == "UNKNOWN":
+    source_container = _source_container(path)
+    if source_container == "UNKNOWN":
         raise ProfileError(f"无法识别字体容器：{path.name}")
     file_hash = _sha256(path)
+    analysis_path = path
+    analysis_container = source_container
+    temp_context: tempfile.TemporaryDirectory[str] | None = None
+    conversion: dict[str, Any] | None = None
+
     try:
-        count = _face_count(path, container)
+        if source_container == "WOFF2":
+            temp_context = tempfile.TemporaryDirectory(prefix="luoshu-woff2-profile-")
+            conversion = font_web_convert.convert(path, Path(temp_context.name))
+            analysis_path = Path(str(conversion["outputPath"]))
+            analysis_container = _source_container(analysis_path)
+            if analysis_container not in {"TTF", "OTF", "TTC"}:
+                raise ProfileError("WOFF2 临时转换没有产生有效 SFNT/TTC")
+
+        count = _face_count(analysis_path, analysis_container)
         if count < 1 or count > 128:
             raise ProfileError(f"字体面数量异常：{path.name}")
-        faces = [_inspect_face(path, file_hash, container, index) for index in range(count)]
+        faces = [
+            _inspect_face(
+                analysis_path,
+                file_hash,
+                analysis_container,
+                source_container,
+                path.name,
+                index,
+            )
+            for index in range(count)
+        ]
     except ProfileError:
         raise
     except Exception as error:
-        if container == "WOFF2":
-            raise ProfileError(f"WOFF2 解析失败，运行时可能缺少 Brotli 支持：{error}") from error
+        if source_container == "WOFF2":
+            raise ProfileError(f"WOFF2 解析/转换失败：{error}") from error
         raise ProfileError(f"fontTools 无法解析字体 {path.name}：{error}") from error
-    return {
+    finally:
+        if temp_context is not None:
+            temp_context.cleanup()
+
+    result = {
         "fileUid": f"sha256:{file_hash}",
         "sha256": file_hash,
         "sourcePath": str(path),
         "fileName": path.name,
         "bytes": int(path.stat().st_size),
-        "container": container,
-        "collection": container == "TTC",
-        "requiresSfntConversion": container in {"WOFF", "WOFF2"},
+        "container": source_container,
+        "collection": analysis_container == "TTC",
+        "requiresSfntConversion": source_container in {"WOFF", "WOFF2"},
         "faceCount": count,
         "faces": faces,
     }
+    if conversion is not None:
+        result["analysisConversion"] = {
+            "decodeMethod": conversion.get("decodeMethod"),
+            "outputFormat": conversion.get("outputFormat"),
+            "outputSha256": conversion.get("outputSha256"),
+        }
+    return result
 
 
 def _group_families(files: list[dict[str, Any]]) -> dict[str, Any]:

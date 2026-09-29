@@ -231,6 +231,7 @@ FontManagerService:
         assert roboto["runtimeEvidence"]["fontManager"] is True
         assert roboto["runtimeEvidence"]["mount"] is True
         assert roboto["metrics"]["unitsPerEm"] == 2048
+        assert roboto["legacyReplaceable"] is True
 
         oem = payload["slots"]["/system_ext/fonts/OemUi-Regular.ttf"]
         assert oem["families"] == []
@@ -240,6 +241,7 @@ FontManagerService:
         assert emoji["families"] == ["emoji"]
         assert emoji["source"] == "physical-scan"
         assert emoji["physicalCandidate"] is False
+        assert emoji["legacyReplaceable"] is False
         assert emoji["xmlRefs"][0]["family"] == "emoji"
 
         japanese = payload["slots"]["/product/fonts/NotoSansJP-Regular.otf"]

@@ -187,7 +187,7 @@ def source_face() -> dict:
     }
 
 
-def build_font_plan(*, missing_bold_ref: bool = False) -> dict:
+def build_font_plan(*, missing_bold_ref: bool = False, duplicate_xml_ref: bool = False) -> dict:
     slots = {
         "/system/fonts/Roboto-Regular.ttf": target_slot(
             "/system/fonts/Roboto-Regular.ttf",
@@ -235,6 +235,11 @@ def build_font_plan(*, missing_bold_ref: bool = False) -> dict:
             weight=400,
         ),
     }
+    if duplicate_xml_ref:
+        duplicate = copy.deepcopy(slots["/system/fonts/Roboto-Regular.ttf"]["xmlRefs"][0])
+        duplicate["captureEvidence"] = "duplicate-semantic-ref"
+        slots["/system/fonts/Roboto-Regular.ttf"]["xmlRefs"].append(duplicate)
+
     topology = {
         "schema": "device-font-topology-v1",
         "topologyRevision": 2,
@@ -480,6 +485,13 @@ def main() -> int:
             False,
         )
         assert route3["routeId"] == route["routeId"], "local snapshot path must not affect routeId"
+
+        duplicate_plan = build_font_plan(duplicate_xml_ref=True)
+        universal_font_plan.validate_plan(duplicate_plan)
+        duplicate_route = router.build_route_plan(duplicate_plan, xml_map, None, False)
+        assert duplicate_route["summary"]["operationCount"] == 3
+        assert duplicate_route["summary"]["conflictCount"] == 0
+        assert duplicate_route["documents"]["/system/etc/fonts.xml"]["operationCount"] == 2
 
         # Route JSON tampering must fail integrity validation.
         tampered = copy.deepcopy(route)

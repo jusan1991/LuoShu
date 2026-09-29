@@ -303,10 +303,24 @@ def fixture() -> tuple[dict, dict]:
         "generatedAt": 1,
         "buildKey": "universal-plan-test",
         "romKind": "generic",
-        "summary": {"slotCount": len(slots)},
+        "summary": {
+            "slotCount": len(slots),
+            "dataFontFileCount": 2,
+            "dataFontConfigReferenceCount": 1,
+        },
         "slots": slots,
         "families": {},
-        "runtime": {},
+        "unresolvedXmlRefs": [
+            {
+                "sourceXml": "/product/etc/fonts_customization.xml",
+                "family": "vendor-unresolved",
+                "resolvedPath": ""
+            }
+        ],
+        "runtime": {
+            "dataFontFiles": ["/data/fonts/files/a.ttf", "/data/fonts/files/b.ttf"],
+            "dataFontsConfig": {"references": ["a.ttf"]},
+        },
     }
     role_map = {
         "schema": "device-font-roles-v1",
@@ -353,6 +367,13 @@ def main() -> int:
         assert plan["state"] == "planned"
         assert plan["mutatesSystem"] is False
         assert plan["summary"]["executableNow"] is False
+        assert plan["constraints"]["dataFontFileCount"] == 2
+        assert plan["constraints"]["dataFontConfigReferenceCount"] == 1
+        assert plan["constraints"]["unresolvedXmlRefCount"] == 1
+        assert "data-font-layer-review" in plan["constraints"]["requirements"]
+        assert "resolve-unresolved-xml-refs" in plan["constraints"]["requirements"]
+        assert "data-font-layer-active" in plan["constraints"]["risks"]
+        assert "unresolved-xml-routes" in plan["constraints"]["risks"]
 
         ui_cjk = plan["targets"]["/system/fonts/UiCjk.ttf"]
         assert ui_cjk["action"] == "compile"
@@ -438,6 +459,20 @@ def main() -> int:
         ])
         assert tampered_result.returncode != 0
         assert "planId" in (tampered_result.stdout + tampered_result.stderr)
+
+        constraint_tamper = json.loads(output.read_text(encoding="utf-8"))
+        constraint_tamper["constraints"]["requirements"] = []
+        constraint_tamper_path = temp / "constraint-tampered-plan.json"
+        constraint_tamper_path.write_text(json.dumps(constraint_tamper), encoding="utf-8")
+        constraint_tamper_result = run([
+            sys.executable, str(planner),
+            "--topology", str(topology),
+            "--roles", str(roles),
+            "--source-profile", str(profile),
+            "--validate", str(constraint_tamper_path),
+        ])
+        assert constraint_tamper_result.returncode != 0
+        assert "planId" in (constraint_tamper_result.stdout + constraint_tamper_result.stderr)
 
         # The same buildKey with a changed topology is still a different input.
         changed_topology_data = json.loads(json.dumps(topology_data))

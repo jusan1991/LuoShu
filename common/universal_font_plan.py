@@ -1,0 +1,701 @@
+#!/usr/bin/env python3
+"""Build a deterministic universal FontPlan from topology, roles and source profile.
+
+Phase 4 is planning only. It never writes Android font XML, builds replacement
+font files, mounts paths, or changes /data/fonts.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+SCHEMA = "universal-font-plan-v1"
+PLAN_REVISION = 1
+TOPOLOGY_SCHEMA = "device-font-topology-v1"
+ROLES_SCHEMA = "device-font-roles-v1"
+SOURCE_SCHEMA = "source-font-profile-v1"
+
+PROTECTED_ROLES = {
+    "monospace", "serif", "emoji", "symbol-icon", "special-fallback",
+}
+TEXT_ROLES = {"ui-sans", "cjk", "latin"}
+SPECIALIZED_ROLES = {"numeric", "clock"}
+
+
+class UniversalPlanError(RuntimeError):
+    pass
+
+
+def _int(value: Any, default: int | None = None) -> int | None:
+    try:
+        if isinstance(value, bool):
+            return default
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _float(value: Any, default: float | None = None) -> float | None:
+    try:
+        if isinstance(value, bool):
+            return default
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return result if math.isfinite(result) else default
+
+
+def _load(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise UniversalPlanError(f"无法读取计划输入：{path}") from error
+    if not isinstance(value, dict):
+        raise UniversalPlanError(f"计划输入根节点无效：{path}")
+    return value
+
+
+def _atomic_write(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    temp.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temp, 0o600)
+    os.replace(temp, path)
+
+
+def _canonical_hash(value: Any) -> str:
+    blob = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _topology_slots(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = topology.get("slots")
+    if not isinstance(raw, dict):
+        raise UniversalPlanError("设备拓扑缺少 slots")
+    return {
+        str(path): slot
+        for path, slot in raw.items()
+        if isinstance(slot, dict) and str(path).startswith("/")
+    }
+
+
+def _role_slots(roles: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = roles.get("slots")
+    if not isinstance(raw, dict):
+        raise UniversalPlanError("字体角色映射缺少 slots")
+    return {
+        str(path): value
+        for path, value in raw.items()
+        if isinstance(value, dict)
+    }
+
+
+def _source_faces(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    faces: list[dict[str, Any]] = []
+    raw_files = profile.get("files")
+    if not isinstance(raw_files, list):
+        raise UniversalPlanError("源字体 Profile 缺少 files")
+    for file_info in raw_files:
+        if not isinstance(file_info, dict):
+            continue
+        source_path = str(file_info.get("sourcePath") or "")
+        source_container = str(file_info.get("container") or "")
+        conversion_required = file_info.get("requiresSfntConversion") is True
+        raw_faces = file_info.get("faces")
+        if not isinstance(raw_faces, list):
+            continue
+        for face in raw_faces:
+            if not isinstance(face, dict):
+                continue
+            item = dict(face)
+            item["_sourcePath"] = source_path
+            item["_sourceContainer"] = source_container
+            item["_conversionRequired"] = conversion_required
+            faces.append(item)
+    if not faces:
+        raise UniversalPlanError("源字体 Profile 没有可分析的 face")
+    return faces
+
+
+def _coverage(slot: dict[str, Any]) -> dict[str, Any]:
+    metrics = slot.get("metrics")
+    if not isinstance(metrics, dict):
+        return {}
+    coverage = metrics.get("coverage")
+    return coverage if isinstance(coverage, dict) else {}
+
+
+def _target_weight(slot: dict[str, Any]) -> int:
+    metrics = slot.get("metrics")
+    if isinstance(metrics, dict):
+        value = _int(metrics.get("weightClass"))
+        if value is not None and 1 <= value <= 1000:
+            return value
+    refs = slot.get("xmlRefs")
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            value = _int(ref.get("weight"))
+            if value is not None and 1 <= value <= 1000:
+                return value
+    return 400
+
+
+def _target_italic(slot: dict[str, Any]) -> bool:
+    refs = slot.get("xmlRefs")
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            style = str(ref.get("style") or "").lower()
+            if style in {"italic", "oblique"}:
+                return True
+    name = str(slot.get("slotName") or "").lower()
+    return "italic" in name or "oblique" in name
+
+
+def _target_variable(slot: dict[str, Any]) -> bool:
+    metrics = slot.get("metrics")
+    if isinstance(metrics, dict):
+        axes = metrics.get("variationAxes")
+        if isinstance(axes, list) and axes:
+            return True
+    name = str(slot.get("slotName") or "").lower()
+    return any(token in name for token in ("variable", "flex", "vf." , "vf_", "-vf"))
+
+
+def _target_requires_cjk(role: str, slot: dict[str, Any]) -> bool:
+    if role == "cjk":
+        return True
+    coverage = _coverage(slot)
+    if coverage.get("hasHan") is True:
+        return True
+    try:
+        if int(coverage.get("hanCount") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    refs = slot.get("xmlRefs")
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            attrs = ref.get("familyAttributes")
+            if not isinstance(attrs, dict):
+                continue
+            lang = str(
+                attrs.get("lang")
+                or attrs.get("language")
+                or attrs.get("locale")
+                or ""
+            ).lower()
+            if lang.startswith(("zh", "hans", "hant", "cmn", "yue")):
+                return True
+    return False
+
+
+def _face_capabilities(face: dict[str, Any]) -> dict[str, Any]:
+    value = face.get("capabilities")
+    return value if isinstance(value, dict) else {}
+
+
+def _face_style(face: dict[str, Any]) -> dict[str, Any]:
+    value = face.get("style")
+    return value if isinstance(value, dict) else {}
+
+
+def _face_variation(face: dict[str, Any]) -> dict[str, Any]:
+    value = face.get("variation")
+    return value if isinstance(value, dict) else {}
+
+
+def _wght_axis(face: dict[str, Any]) -> dict[str, Any] | None:
+    variation = _face_variation(face)
+    axes = variation.get("axes")
+    if not isinstance(axes, list):
+        return None
+    for axis in axes:
+        if isinstance(axis, dict) and str(axis.get("tag")) == "wght":
+            return axis
+    return None
+
+
+def _weight_distance(face: dict[str, Any], target_weight: int) -> tuple[float, str]:
+    axis = _wght_axis(face)
+    if axis is not None:
+        minimum = _float(axis.get("min"))
+        maximum = _float(axis.get("max"))
+        if minimum is not None and maximum is not None:
+            if minimum <= target_weight <= maximum:
+                return 0.0, "variable-in-range"
+            return min(abs(target_weight - minimum), abs(target_weight - maximum)), "variable-clamped"
+    source_weight = _int(_face_style(face).get("weight"), 400) or 400
+    return float(abs(source_weight - target_weight)), "static"
+
+
+def _face_meets_role(face: dict[str, Any], role: str, slot: dict[str, Any]) -> tuple[bool, list[str]]:
+    caps = _face_capabilities(face)
+    reasons: list[str] = []
+    if caps.get("colorFont") is True:
+        return False, ["color-font"]
+    if face.get("_conversionRequired") is True:
+        reasons.append("sfnt-conversion-required")
+
+    if role == "ui-sans":
+        if _target_requires_cjk(role, slot):
+            if caps.get("cjkUi") is not True:
+                return False, reasons + ["cjk-ui-coverage-missing"]
+            reasons.append("cjk-ui-capable")
+        else:
+            if caps.get("latinUi") is not True:
+                return False, reasons + ["latin-ui-coverage-missing"]
+            reasons.append("latin-ui-capable")
+    elif role == "cjk":
+        if caps.get("cjkUi") is not True:
+            return False, reasons + ["cjk-ui-coverage-missing"]
+        reasons.append("cjk-ui-capable")
+    elif role == "latin":
+        if caps.get("latinUi") is not True:
+            return False, reasons + ["latin-ui-coverage-missing"]
+        reasons.append("latin-ui-capable")
+    elif role in SPECIALIZED_ROLES:
+        if caps.get("numeric") is not True:
+            return False, reasons + ["digit-coverage-missing"]
+        reasons.append("numeric-capable")
+    else:
+        return False, reasons + ["role-not-replaceable"]
+    return True, reasons
+
+
+def _candidate_score(
+    face: dict[str, Any],
+    role: str,
+    slot: dict[str, Any],
+    target_weight: int,
+    target_italic: bool,
+) -> tuple[tuple[float, float, float, str, int], dict[str, Any]] | None:
+    compatible, reasons = _face_meets_role(face, role, slot)
+    if not compatible:
+        return None
+
+    style = _face_style(face)
+    source_italic = style.get("italic") is True
+    italic_penalty = 0.0 if source_italic == target_italic else 10000.0
+    weight_distance, weight_mode = _weight_distance(face, target_weight)
+    web_penalty = 5000.0 if face.get("_conversionRequired") is True else 0.0
+
+    caps = _face_capabilities(face)
+    role_bonus = 0.0
+    if role == "ui-sans" and caps.get("globalUiCandidate") is True:
+        role_bonus = -200.0
+    if role == "cjk" and caps.get("cjkUi") is True:
+        role_bonus = -100.0
+
+    uid = str(face.get("uid") or "")
+    index = _int(face.get("faceIndex"), 0) or 0
+    score = (
+        italic_penalty,
+        web_penalty,
+        max(0.0, weight_distance + role_bonus),
+        uid,
+        index,
+    )
+    details = {
+        "roleReasons": reasons,
+        "weightMode": weight_mode,
+        "weightDistance": round(weight_distance, 4),
+        "italicMatch": source_italic == target_italic,
+    }
+    return score, details
+
+
+def _select_face(
+    faces: list[dict[str, Any]],
+    role: str,
+    slot: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    target_weight = _target_weight(slot)
+    target_italic = _target_italic(slot)
+    ranked: list[tuple[tuple[float, float, float, str, int], dict[str, Any], dict[str, Any]]] = []
+    rejected: dict[str, int] = {}
+
+    for face in faces:
+        compatible, reject_reasons = _face_meets_role(face, role, slot)
+        if not compatible:
+            for reason in reject_reasons:
+                rejected[reason] = rejected.get(reason, 0) + 1
+            continue
+        candidate = _candidate_score(face, role, slot, target_weight, target_italic)
+        if candidate is None:
+            continue
+        score, details = candidate
+        ranked.append((score, face, details))
+
+    if not ranked:
+        return None, {
+            "targetWeight": target_weight,
+            "targetItalic": target_italic,
+            "rejected": dict(sorted(rejected.items())),
+        }
+
+    ranked.sort(key=lambda item: item[0])
+    _score, selected, details = ranked[0]
+    return selected, {
+        "targetWeight": target_weight,
+        "targetItalic": target_italic,
+        "candidateCount": len(ranked),
+        **details,
+    }
+
+
+def _source_ref(face: dict[str, Any]) -> dict[str, Any]:
+    names = face.get("names") if isinstance(face.get("names"), dict) else {}
+    style = _face_style(face)
+    variation = _face_variation(face)
+    return {
+        "uid": str(face.get("uid") or ""),
+        "fileUid": str(face.get("fileUid") or ""),
+        "sourcePath": str(face.get("_sourcePath") or ""),
+        "sourceContainer": str(face.get("_sourceContainer") or ""),
+        "faceIndex": _int(face.get("faceIndex"), 0) or 0,
+        "family": str(names.get("family") or ""),
+        "subfamily": str(names.get("subfamily") or ""),
+        "postScriptName": str(names.get("postScriptName") or ""),
+        "weight": _int(style.get("weight"), 400) or 400,
+        "italic": style.get("italic") is True,
+        "variable": variation.get("variable") is True,
+        "axes": list(variation.get("axes") or []) if isinstance(variation.get("axes"), list) else [],
+    }
+
+
+def _xml_refs(slot: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = slot.get("xmlRefs")
+    if not isinstance(raw, list):
+        return []
+    return [dict(ref) for ref in raw if isinstance(ref, dict)]
+
+
+def _compile_requirements(
+    role: str,
+    slot: dict[str, Any],
+    face: dict[str, Any],
+    selection: dict[str, Any],
+) -> tuple[str, list[str], list[str]]:
+    requirements: list[str] = []
+    risks: list[str] = []
+    target_weight = int(selection["targetWeight"])
+    style = _face_style(face)
+    source_weight = _int(style.get("weight"), 400) or 400
+    weight_mode = str(selection.get("weightMode") or "static")
+    target_variable = _target_variable(slot)
+    source_variable = _face_variation(face).get("variable") is True
+
+    if face.get("_conversionRequired") is True:
+        requirements.append("sfnt-conversion")
+    if role in TEXT_ROLES:
+        requirements.append("metrics-normalization")
+    if role in SPECIALIZED_ROLES:
+        requirements.extend(["metrics-normalization", "specialized-numeric-contract"])
+    if role == "clock":
+        requirements.append("stock-exact-advance")
+    if weight_mode == "variable-in-range":
+        if not target_variable:
+            requirements.append("variable-instance")
+    elif weight_mode == "variable-clamped":
+        requirements.append("variable-instance")
+        risks.append("source-weight-axis-out-of-range")
+    elif source_weight != target_weight:
+        risks.append("static-weight-fallback")
+
+    if target_variable and not source_variable:
+        risks.append("static-source-for-variable-target")
+    if selection.get("italicMatch") is not True:
+        risks.append("italic-style-mismatch")
+
+    requirements = sorted(set(requirements))
+    risks = sorted(set(risks))
+    if role in SPECIALIZED_ROLES:
+        compiler = "specialized"
+    elif requirements:
+        compiler = "compatibility"
+    else:
+        compiler = "direct"
+    return compiler, requirements, risks
+
+
+def _plan_slot(
+    path: str,
+    slot: dict[str, Any],
+    role_info: dict[str, Any],
+    faces: list[dict[str, Any]],
+) -> dict[str, Any]:
+    role = str(role_info.get("role") or "unknown-protected")
+    confidence = _int(role_info.get("confidence"), 0) or 0
+    role_action = str(role_info.get("action") or "review")
+    base: dict[str, Any] = {
+        "path": path,
+        "slotName": str(slot.get("slotName") or Path(path).name),
+        "partition": str(slot.get("partition") or ""),
+        "families": list(slot.get("families") or []) if isinstance(slot.get("families"), list) else [],
+        "xmlRefs": _xml_refs(slot),
+        "role": role,
+        "roleConfidence": confidence,
+        "roleAction": role_action,
+        "runtimeEvidence": dict(slot.get("runtimeEvidence") or {}) if isinstance(slot.get("runtimeEvidence"), dict) else {},
+        "legacyReplaceable": slot.get("legacyReplaceable") if isinstance(slot.get("legacyReplaceable"), bool) else None,
+        "action": "review",
+        "status": "review",
+        "compiler": "none",
+        "requirements": [],
+        "risks": [],
+        "reasons": [],
+    }
+
+    if role in PROTECTED_ROLES:
+        base.update(
+            action="preserve",
+            status="ready",
+            reasons=["protected-role"],
+        )
+        return base
+    if role == "unknown-protected" or role_action == "review":
+        base.update(
+            action="review",
+            status="review",
+            reasons=["insufficient-role-evidence"],
+        )
+        return base
+    if role not in TEXT_ROLES | SPECIALIZED_ROLES:
+        base.update(
+            action="preserve",
+            status="ready",
+            reasons=["role-not-in-universal-replacement-scope"],
+        )
+        return base
+
+    face, selection = _select_face(faces, role, slot)
+    base["selection"] = selection
+    if face is None:
+        base.update(
+            action="blocked",
+            status="blocked",
+            reasons=["no-compatible-source-face"],
+            risks=sorted((selection.get("rejected") or {}).keys()),
+        )
+        return base
+
+    compiler, requirements, risks = _compile_requirements(role, slot, face, selection)
+    base["source"] = _source_ref(face)
+    base["compiler"] = compiler
+    base["requirements"] = requirements
+    base["risks"] = risks
+    base["reasons"] = list(selection.get("roleReasons") or [])
+
+    if role in SPECIALIZED_ROLES:
+        base["action"] = "compile-specialized"
+    elif compiler == "direct":
+        base["action"] = "replace"
+    else:
+        base["action"] = "compile"
+
+    # Phase 4 never claims a risky mapping is ready for execution. Phase 6 must
+    # resolve these compiler risks before later execution phases can consume it.
+    if risks:
+        base["status"] = "conditional"
+    else:
+        base["status"] = "ready"
+    return base
+
+
+def _validate_inputs(
+    topology: dict[str, Any],
+    roles: dict[str, Any],
+    profile: dict[str, Any],
+) -> tuple[str, str]:
+    if topology.get("schema") != TOPOLOGY_SCHEMA or topology.get("state") != "ready":
+        raise UniversalPlanError("设备字体拓扑未就绪")
+    if roles.get("schema") != ROLES_SCHEMA or roles.get("state") != "ready":
+        raise UniversalPlanError("字体角色映射未就绪")
+    if profile.get("schema") != SOURCE_SCHEMA or profile.get("state") != "ready":
+        raise UniversalPlanError("源字体 Profile 未就绪")
+
+    build_key = str(topology.get("buildKey") or "unknown")
+    role_build_key = str(roles.get("buildKey") or "unknown")
+    if build_key != "unknown" and role_build_key != "unknown" and build_key != role_build_key:
+        raise UniversalPlanError("角色映射与设备拓扑 buildKey 不一致")
+
+    profile_id = str(profile.get("profileId") or "")
+    if not profile_id.startswith("sha256:"):
+        raise UniversalPlanError("源字体 Profile 缺少稳定 profileId")
+    return build_key, profile_id
+
+
+def build_plan(
+    topology: dict[str, Any],
+    roles: dict[str, Any],
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    build_key, profile_id = _validate_inputs(topology, roles, profile)
+    slots = _topology_slots(topology)
+    role_slots = _role_slots(roles)
+    faces = _source_faces(profile)
+
+    targets: dict[str, dict[str, Any]] = {}
+    missing_role_slots: list[str] = []
+    for path in sorted(slots):
+        role_info = role_slots.get(path)
+        if role_info is None:
+            missing_role_slots.append(path)
+            role_info = {
+                "role": "unknown-protected",
+                "confidence": 0,
+                "action": "review",
+            }
+        targets[path] = _plan_slot(path, slots[path], role_info, faces)
+
+    action_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    compiler_counts: dict[str, int] = {}
+    for item in targets.values():
+        for key, bucket in (
+            ("action", action_counts),
+            ("status", status_counts),
+            ("compiler", compiler_counts),
+        ):
+            value = str(item.get(key) or "unknown")
+            bucket[value] = bucket.get(value, 0) + 1
+
+    semantic = {
+        "buildKey": build_key,
+        "profileId": profile_id,
+        "topologyRevision": topology.get("topologyRevision"),
+        "roleRevision": roles.get("roleRevision"),
+        "targets": targets,
+    }
+    plan_id = f"sha256:{_canonical_hash(semantic)}"
+    plan = {
+        "schema": SCHEMA,
+        "planRevision": PLAN_REVISION,
+        "state": "planned",
+        "mutatesSystem": False,
+        "generatedAt": int(time.time()),
+        "planId": plan_id,
+        "device": {
+            "buildKey": build_key,
+            "romKind": str(topology.get("romKind") or "generic"),
+            "topologyRevision": topology.get("topologyRevision"),
+            "roleRevision": roles.get("roleRevision"),
+        },
+        "source": {
+            "profileId": profile_id,
+            "fileCount": profile.get("summary", {}).get("fileCount"),
+            "faceCount": profile.get("summary", {}).get("faceCount"),
+            "familyCount": profile.get("summary", {}).get("familyCount"),
+            "capabilities": dict(profile.get("summary", {}).get("capabilities") or {}),
+        },
+        "summary": {
+            "slotCount": len(targets),
+            "actionCounts": dict(sorted(action_counts.items())),
+            "statusCounts": dict(sorted(status_counts.items())),
+            "compilerCounts": dict(sorted(compiler_counts.items())),
+            "missingRoleSlotCount": len(missing_role_slots),
+            "executableNow": False,
+        },
+        "missingRoleSlots": missing_role_slots,
+        "targets": targets,
+    }
+    validate_plan(plan, expected_build_key=build_key, expected_profile_id=profile_id)
+    return plan
+
+
+def validate_plan(
+    plan: dict[str, Any],
+    expected_build_key: str | None = None,
+    expected_profile_id: str | None = None,
+) -> None:
+    if plan.get("schema") != SCHEMA or plan.get("state") != "planned":
+        raise UniversalPlanError("Universal FontPlan 格式无效")
+    if _int(plan.get("planRevision"), 0) != PLAN_REVISION:
+        raise UniversalPlanError("Universal FontPlan 版本无效")
+    if plan.get("mutatesSystem") is not False:
+        raise UniversalPlanError("Phase 4 FontPlan 不得修改系统")
+    if plan.get("summary", {}).get("executableNow") is not False:
+        raise UniversalPlanError("Phase 4 FontPlan 不得声明可直接执行")
+    device = plan.get("device") if isinstance(plan.get("device"), dict) else {}
+    source = plan.get("source") if isinstance(plan.get("source"), dict) else {}
+    if expected_build_key and expected_build_key != "unknown":
+        if device.get("buildKey") != expected_build_key:
+            raise UniversalPlanError("Universal FontPlan 与设备 buildKey 不一致")
+    if expected_profile_id and source.get("profileId") != expected_profile_id:
+        raise UniversalPlanError("Universal FontPlan 与源字体 Profile 不一致")
+    targets = plan.get("targets")
+    if not isinstance(targets, dict):
+        raise UniversalPlanError("Universal FontPlan 缺少 targets")
+    for path, item in targets.items():
+        if not isinstance(item, dict):
+            raise UniversalPlanError(f"Universal FontPlan 目标无效：{path}")
+        role = str(item.get("role") or "")
+        action = str(item.get("action") or "")
+        if role in PROTECTED_ROLES and action != "preserve":
+            raise UniversalPlanError(f"受保护字体不得进入替换计划：{path}")
+        if role == "unknown-protected" and action != "review":
+            raise UniversalPlanError(f"未知字体不得自动替换：{path}")
+        if role in SPECIALIZED_ROLES and action not in {"compile-specialized", "blocked"}:
+            raise UniversalPlanError(f"Clock/Numeric 不得走普通替换：{path}")
+        if action in {"replace", "compile", "compile-specialized"} and not isinstance(item.get("source"), dict):
+            raise UniversalPlanError(f"替换目标缺少源 face：{path}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--topology", required=True, type=Path)
+    parser.add_argument("--roles", required=True, type=Path)
+    parser.add_argument("--source-profile", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--validate", type=Path)
+    args = parser.parse_args()
+
+    try:
+        topology = _load(args.topology)
+        roles = _load(args.roles)
+        profile = _load(args.source_profile)
+        build_key, profile_id = _validate_inputs(topology, roles, profile)
+        if args.validate is not None:
+            plan = _load(args.validate)
+            validate_plan(plan, build_key, profile_id)
+        else:
+            plan = build_plan(topology, roles, profile)
+            if args.output is not None:
+                _atomic_write(args.output, plan)
+    except (UniversalPlanError, OSError, json.JSONDecodeError) as error:
+        print(json.dumps({"status": "error", "message": str(error)}, ensure_ascii=False))
+        return 1
+
+    summary = plan["summary"]
+    print(json.dumps({
+        "status": "ok",
+        "schema": plan["schema"],
+        "planId": plan["planId"],
+        "slotCount": summary["slotCount"],
+        "actionCounts": summary["actionCounts"],
+        "statusCounts": summary["statusCounts"],
+        "compilerCounts": summary["compilerCounts"],
+        "executableNow": summary["executableNow"],
+    }, ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -6,6 +6,8 @@ on:
     paths:
       - common/font_inventory.py
       - common/font_inventory_scan.py
+      - common/font_topology_snapshot.py
+      - common/font_topology_snapshot.sh
       - common/stock_inventory_scan.py
       - common/font_manager.sh
       - common/font_metrics_normalize.py
@@ -15,6 +17,7 @@ on:
       - .luoshu-runtime/compat/v227/customize.sh
       - scripts/font_inventory_test.py
       - scripts/font_inventory_scan_test.py
+      - scripts/font_topology_snapshot_test.py
       - scripts/stock_inventory_scan_wrapper_test.py
       - scripts/rom_adapter_inventory_test.sh
       - scripts/font_metrics_normalization_test.py
@@ -35,11 +38,12 @@ jobs:
       - name: Validate inventory scanners and runtime mapper
         run: |
           set -eu
-          python3 -m py_compile common/font_inventory.py common/font_inventory_scan.py common/stock_inventory_scan.py common/font_metrics_normalize.py
+          python3 -m py_compile common/font_inventory.py common/font_inventory_scan.py common/font_topology_snapshot.py common/stock_inventory_scan.py common/font_metrics_normalize.py
           FONT="$(find /usr/share/fonts -type f -iname 'DejaVuSans.ttf' -print -quit)"
           test -s "$FONT"
           python3 scripts/font_inventory_test.py --font "$FONT"
           python3 scripts/font_inventory_scan_test.py --font "$FONT"
+          python3 scripts/font_topology_snapshot_test.py
           python3 scripts/stock_inventory_scan_wrapper_test.py
           sh scripts/rom_adapter_inventory_test.sh "$FONT"
           python3 scripts/font_metrics_normalization_test.py
@@ -50,6 +54,7 @@ jobs:
           sh -n customize.sh
           sh -n "$INSTALLER"
           sh -n common/rom_adapters.sh
+          sh -n common/font_topology_snapshot.sh
           sh -n common/device_font_payload_policy.sh
           sh -n common/font_manager.sh
           grep -q 'luoshu_private_install_migrate' customize.sh
@@ -67,5 +72,7 @@ jobs:
           grep -q 'device_font_inventory.json' common/font_metrics_normalize.py
           grep -qx 'common/font_inventory.py' scripts/module_payload_manifest.txt
           grep -qx 'common/font_inventory_scan.py' scripts/module_payload_manifest.txt
+          grep -qx 'common/font_topology_snapshot.py' scripts/module_payload_manifest.txt
+          grep -qx 'common/font_topology_snapshot.sh' scripts/module_payload_manifest.txt
           grep -qx 'common/stock_inventory_scan.py' scripts/module_payload_manifest.txt
           grep -qx '.luoshu-runtime' scripts/module_payload_manifest.txt

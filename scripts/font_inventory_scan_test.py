@@ -59,11 +59,16 @@ def main() -> int:
         shutil.copy2(args.font, future_fonts / "FutureUi-Regular.ttf")
 
         (etc_dirs["system"] / "fonts.xml").write_text(
-            '<familyset><family name="sans-serif"><font weight="400">Roboto-Regular.ttf</font></family></familyset>\n',
+            '<familyset><family name="sans-serif"><font weight="400">Roboto-Regular.ttf</font></family>'
+            '<alias name="sans" to="sans-serif"/></familyset>\n',
             encoding="utf-8",
         )
         (etc_dirs["product"] / "fonts_customization.xml").write_text(
-            '<fonts-modification><family name="system-ui"><font weight="400">ProductUi-Regular.ttf</font></family></fonts-modification>\n',
+            '<fonts-modification>'
+            '<family name="system-ui"><font weight="400">ProductUi-Regular.ttf</font></family>'
+            '<family name="fallback-japanese" lang="ja" variant="compact">'
+            '<font weight="400">ProductUi-Regular.ttf</font></family>'
+            '</fonts-modification>\n',
             encoding="utf-8",
         )
         (etc_dirs["my_product"] / "fonts.xml").write_text(
@@ -114,7 +119,7 @@ def main() -> int:
         candidates = json.loads((temp / "device_font_candidates.json").read_text(encoding="utf-8"))
         summary = payload["scanSummary"]
 
-        assert payload["scannerRevision"] == 4
+        assert payload["scannerRevision"] == 5
         assert payload["romKind"] == "coloros"
         assert result["stockFontFileCount"] == 8
         assert result["stockFontUniqueFileCount"] == 7
@@ -130,6 +135,22 @@ def main() -> int:
         assert summary["partitionFontFileCounts"]["odm"] == 1
         assert summary["partitionUniqueFontFileCounts"]["odm"] == 0
         assert summary["xmlSourceCount"] == 6
+        assert payload["xmlGraph"]["schema"] == "device-font-xml-graph-v1"
+        assert payload["xmlGraph"]["refCount"] >= 7
+        assert payload["xmlGraph"]["aliasCount"] == 1
+        fallback_refs = [
+            ref for ref in payload["xmlGraph"]["refs"]
+            if ref["family"] == "fallback-japanese"
+        ]
+        assert len(fallback_refs) == 1
+        assert fallback_refs[0]["familyAttributes"]["lang"] == "ja"
+        assert fallback_refs[0]["familyAttributes"]["variant"] == "compact"
+        assert fallback_refs[0]["resolvedPath"] == "/product/fonts/ProductUi-Regular.ttf"
+        assert payload["xmlGraph"]["aliases"] == [{
+            "sourceXml": str(etc_dirs["system"] / "fonts.xml"),
+            "name": "sans",
+            "to": "sans-serif",
+        }]
         assert payload["slotCount"] == 8
         assert "/system/fonts/Roboto-Regular.ttf" in payload["slots"]
         mystery = payload["slots"]["/system_ext/fonts/MysteryUiFace-Regular.ttf"]

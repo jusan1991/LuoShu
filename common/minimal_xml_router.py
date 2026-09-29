@@ -53,7 +53,9 @@ def _normalize(value: str) -> str:
     return re.sub(r"[\s_-]+", "-", value.strip().lower()).strip("-")
 
 
-def _local(tag: str) -> str:
+def _local(tag: Any) -> str:
+    if not isinstance(tag, str):
+        return "#comment"
     return tag.rsplit("}", 1)[-1]
 
 
@@ -463,45 +465,38 @@ def _source_xmls(font_plan: dict[str, Any]) -> list[str]:
     return sorted(values)
 
 
-def _semantic_tree(tree: ET.ElementTree, replacement_ordinals: set[int] | None = None) -> list[dict[str, Any]]:
-    root = tree.getroot()
-    parents = {child: parent for parent in root.iter() for child in list(parent)}
+def _semantic_tree(
+    tree: ET.ElementTree,
+    replacement_ordinals: set[int] | None = None,
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    ordinal = 0
-    for element in root.iter():
-        if _local(element.tag) == "alias":
+    font_ordinal = 0
+    for element in tree.getroot().iter():
+        tag = _local(element.tag)
+        if tag == "#comment":
             result.append({
-                "kind": "alias",
-                "attributes": dict(sorted((str(k), str(v)) for k, v in element.attrib.items())),
-                "text": (element.text or "").strip(),
+                "kind": "comment",
+                "text": str(element.text or ""),
             })
             continue
-        if _local(element.tag) != "family":
-            continue
-        family_name = _effective_family_name(element, parents)
-        result.append({
-            "kind": "family",
-            "name": family_name,
-            "attributes": _family_attrs(element),
-        })
-        for font in list(element):
-            if _local(font.tag) != "font":
-                continue
-            result.append({
-                "kind": "font",
-                "ordinal": ordinal,
-                "family": family_name,
-                "attributes": _font_attrs(font),
-                "axes": _axis_children(font),
-                "text": (
-                    "<ROUTED>"
-                    if replacement_ordinals is not None and ordinal in replacement_ordinals
-                    else (font.text or "").strip()
-                ),
-            })
-            ordinal += 1
-    return result
 
+        record: dict[str, Any] = {
+            "kind": tag,
+            "attributes": dict(sorted((str(k), str(v)) for k, v in element.attrib.items())),
+        }
+        text_value = str(element.text or "")
+        if tag == "font":
+            record["ordinal"] = font_ordinal
+            record["text"] = (
+                "<ROUTED>"
+                if replacement_ordinals is not None and font_ordinal in replacement_ordinals
+                else text_value.strip()
+            )
+            font_ordinal += 1
+        elif text_value.strip():
+            record["text"] = text_value.strip()
+        result.append(record)
+    return result
 
 def _validate_font_plan(font_plan: dict[str, Any]) -> None:
     if font_plan.get("schema") != FONT_PLAN_SCHEMA:

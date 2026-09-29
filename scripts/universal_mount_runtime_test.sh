@@ -80,10 +80,14 @@ run_manager() {
   grep -q "^stage=$hook$" "$MOD/config/universal-font-mount.conf"
 }
 
+echo "PHASE7_MOUNT Magisk"
 run_manager Magisk post-fs-data
+echo "PHASE7_MOUNT KernelSU"
 run_manager KernelSU post-mount
+echo "PHASE7_MOUNT APatch"
 run_manager APatch post-mount
 
+echo "PHASE7_MOUNT wrong-hook"
 # Wrong hook is a no-op, not a mount failure.
 set +e
 MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" LUOSHU_PYTHON=python3 \
@@ -93,6 +97,7 @@ RC=$?
 set -e
 test "$RC" -eq 2
 
+echo "PHASE7_MOUNT dynamic-only"
 # Dynamic-only payloads must not require the system self-mount path.
 rm -rf "$MOD/.luoshu-payload/system"
 rm -f "$TMP/system-mounted"
@@ -114,6 +119,7 @@ cmp -s "$MOD/.luoshu-payload/.luoshu-dynamic/test.ttf" "$VISIBLE/data/fonts/file
 mkdir -p "$MOD/.luoshu-payload/system/fonts"
 printf 'system-font-content\n' > "$MOD/.luoshu-payload/system/fonts/Fake.ttf"
 
+echo "PHASE7_MOUNT rollback"
 # Dynamic failure must roll back the system payload transaction.
 rm -f "$TMP/system-rollback"
 printf 'stock\n' > "$VISIBLE/data/fonts/files/runtime.ttf"

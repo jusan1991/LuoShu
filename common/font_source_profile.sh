@@ -44,7 +44,7 @@ _profile_output_for_family() {
 
 _profile_safe_family() {
     case "$1" in
-        ""|*"/"*|*"\"*) return 1 ;;
+        ''|*/*|*\\\\*) return 1 ;;
     esac
     return 0
 }

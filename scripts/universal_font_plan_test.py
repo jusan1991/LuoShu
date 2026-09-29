@@ -33,7 +33,10 @@ def target_slot(
         "partition": "system",
         "families": families,
         "metrics": {
+            "upem": 1000,
             "weightClass": weight,
+            "hhea": {"ascent": 900, "descent": -250, "lineGap": 0},
+            "head": {"xMin": -50, "yMin": -250, "xMax": 1050, "yMax": 1000},
             "coverage": {
                 "hasHan": han,
                 "hanCount": 7000 if han else 0,
@@ -276,6 +279,9 @@ def fixture() -> tuple[dict, dict]:
         "/vendor/fonts/Mystery.ttf": target_slot(
             "Mystery.ttf", [], han=True, weight=400
         ),
+        "/system/fonts/MissingMetrics.ttf": target_slot(
+            "MissingMetrics.ttf", ["sans-serif"], han=False, weight=400
+        ),
     }
     roles = {
         "/system/fonts/UiCjk.ttf": role("ui-sans", "replace"),
@@ -287,7 +293,9 @@ def fixture() -> tuple[dict, dict]:
         "/system/fonts/RobotoMono.ttf": role("monospace", "preserve"),
         "/system/fonts/NotoColorEmoji.ttf": role("emoji", "preserve"),
         "/vendor/fonts/Mystery.ttf": role("unknown-protected", "review", 45),
+        "/system/fonts/MissingMetrics.ttf": role("latin", "conditional"),
     }
+    slots["/system/fonts/MissingMetrics.ttf"]["metrics"].pop("hhea", None)
     topology = {
         "schema": "device-font-topology-v1",
         "topologyRevision": 2,
@@ -392,6 +400,12 @@ def main() -> int:
         mystery = plan["targets"]["/vendor/fonts/Mystery.ttf"]
         assert mystery["action"] == "review"
         assert mystery["status"] == "review"
+
+        missing_metrics = plan["targets"]["/system/fonts/MissingMetrics.ttf"]
+        assert missing_metrics["action"] == "compile"
+        assert missing_metrics["status"] == "conditional"
+        assert "stock-metrics-capture" in missing_metrics["requirements"]
+        assert "target-metrics-missing" in missing_metrics["risks"]
 
         plan_id = plan["planId"]
         second = run(command)

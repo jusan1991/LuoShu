@@ -159,6 +159,8 @@ jobs:
           path: |
             common/python
             .luoshu-runtime/bin/woff2_decompress
+            licenses/WOFF2-LICENSE.txt
+            licenses/Brotli-LICENSE.txt
           key: luoshu-arm64-runtime-${{ runner.os }}-${{ hashFiles('scripts/prepare_composite_runtime.sh') }}
 
       - name: Prepare ARM64 composite runtime

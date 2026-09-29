@@ -257,7 +257,7 @@ Shadow 动作：
 - 当前迁移阶段正式换字体按钮仍不自动 stage-next；只有显式内部 stage-next 才进入新 runtime
 
 ### Phase 8 — Runtime Verification
-状态：**进行中 / universal-font-runtime-verification-v1**
+状态：**已完成 / PR #261 / universal-font-runtime-verification-v1**
 
 重启后自动验证：
 

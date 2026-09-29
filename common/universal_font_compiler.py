@@ -1600,6 +1600,36 @@ def _compile_unit(
     return result
 
 
+def _manifest_semantic(
+    font_plan_id: str,
+    route_id: str,
+    artifacts: list[dict[str, Any]],
+    deferred: list[str],
+) -> dict[str, Any]:
+    stable_artifacts: list[dict[str, Any]] = []
+    for item in artifacts:
+        stable_artifacts.append({
+            key: copy.deepcopy(value)
+            for key, value in item.items()
+            if key not in {"output", "stock"}
+        })
+    return {
+        "fontPlanId": font_plan_id,
+        "routeId": route_id,
+        "artifacts": stable_artifacts,
+        "deferredDynamicTargets": list(deferred),
+    }
+
+
+def _manifest_id(
+    font_plan_id: str,
+    route_id: str,
+    artifacts: list[dict[str, Any]],
+    deferred: list[str],
+) -> str:
+    return f"sha256:{_canonical_hash(_manifest_semantic(font_plan_id, route_id, artifacts, deferred))}"
+
+
 def compile_all(
     font_plan: dict[str, Any],
     route_plan: dict[str, Any],
@@ -1628,20 +1658,12 @@ def compile_all(
         and not deferred
         and route_plan.get("summary", {}).get("routingComplete") is True
     )
-    semantic = {
-        "fontPlanId": font_plan.get("planId"),
-        "routeId": route_plan.get("routeId"),
-        "artifacts": [
-            {
-                key: value
-                for key, value in item.items()
-                if key not in {"output", "stock"}
-            }
-            for item in artifacts
-        ],
-        "deferredDynamicTargets": deferred,
-    }
-    manifest_id = f"sha256:{_canonical_hash(semantic)}"
+    manifest_id = _manifest_id(
+        str(font_plan.get("planId") or ""),
+        str(route_plan.get("routeId") or ""),
+        artifacts,
+        deferred,
+    )
     artifact_map = {
         str(item["artifactId"]): Path(str(item["output"])).name
         for item in artifacts
@@ -1746,6 +1768,14 @@ def validate_manifest(
         raise CompilerError("Artifact manifest artifactMap 与 ready artifacts 不一致")
     if physical_map != dict(sorted(expected_physical_map.items())):
         raise CompilerError("Artifact manifest physicalTargetMap 与 ready artifacts 不一致")
+    expected_manifest_id = _manifest_id(
+        str(font_plan.get("planId") or ""),
+        str(route_plan.get("routeId") or ""),
+        artifacts,
+        list(manifest.get("deferredDynamicTargets") or []),
+    )
+    if manifest.get("manifestId") != expected_manifest_id:
+        raise CompilerError("Artifact manifest manifestId 完整性校验失败")
 
 
 def main() -> int:

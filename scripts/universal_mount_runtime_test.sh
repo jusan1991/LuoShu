@@ -5,9 +5,17 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 MOD="$TMP/module"
 VISIBLE="$TMP/visible"
-mkdir -p "$MOD/common" "$MOD/config" "$MOD/.luoshu-payload/.luoshu-runtime/deployment" "$MOD/.luoshu-payload/.luoshu-dynamic" "$VISIBLE/data/fonts/files"
+mkdir -p "$MOD/common" "$MOD/config" "$MOD/.luoshu-payload/.luoshu-runtime/deployment" "$MOD/.luoshu-payload/.luoshu-dynamic" "$MOD/.luoshu-payload/system/fonts" "$VISIBLE/data/fonts/files"
 cp "$ROOT/common/universal_mount_runtime.sh" "$MOD/common/"
+printf 'system-font-content\n' > "$MOD/.luoshu-payload/system/fonts/Fake.ttf"
 printf '{}\n' > "$MOD/.luoshu-payload/.luoshu-runtime/deployment/deployment.json"
+cat > "$MOD/common/universal_font_deployment.py" <<'PY'
+#!/usr/bin/env python3
+import sys
+# Mount runtime only needs a zero/non-zero integrity verdict here; the real
+# deployment validator is covered by universal_font_deployment_test.py.
+raise SystemExit(0 if "--validate-payload-only" in sys.argv else 2)
+PY
 printf 'dynamic-font-content\n' > "$MOD/.luoshu-payload/.luoshu-dynamic/test.ttf"
 HASH=$(sha256sum "$MOD/.luoshu-payload/.luoshu-dynamic/test.ttf" | awk '{print $1}')
 printf '.luoshu-dynamic/test.ttf|/data/fonts/files/runtime.ttf|%s\n' "$HASH" > "$MOD/.luoshu-payload/.luoshu-runtime/deployment/dynamic-mounts.conf"
@@ -56,7 +64,9 @@ run_manager() {
   rm -rf "$TMP/state"; mkdir -p "$TMP/state"
   printf 'stock\n' > "$VISIBLE/data/fonts/files/runtime.ttf"
   MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" \
+  LUOSHU_PYTHON=python3 \
   LUOSHU_UNIVERSAL_TEST_MANAGER="$manager" \
+  LUOSHU_UNIVERSAL_TEST_ASSUME_RO=1 \
   LUOSHU_UNIVERSAL_TEST_VISIBLE_ROOT="$VISIBLE" \
   LUOSHU_UNIVERSAL_MOUNT_STATE_ROOT="$TMP/state" \
   LUOSHU_UNIVERSAL_TEST_SYSTEM_MOUNT_COMMAND="$TMP/system-mount-ok.sh" \
@@ -76,18 +86,41 @@ run_manager APatch post-mount
 
 # Wrong hook is a no-op, not a mount failure.
 set +e
-MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" LUOSHU_UNIVERSAL_TEST_MANAGER=KernelSU \
+MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" LUOSHU_PYTHON=python3 \
+  LUOSHU_UNIVERSAL_TEST_MANAGER=KernelSU LUOSHU_UNIVERSAL_TEST_ASSUME_RO=1 \
   sh "$MOD/common/universal_mount_runtime.sh" hook post-fs-data >/dev/null 2>&1
 RC=$?
 set -e
 test "$RC" -eq 2
 
+# Dynamic-only payloads must not require the system self-mount path.
+rm -rf "$MOD/.luoshu-payload/system"
+rm -f "$TMP/system-mounted"
+printf 'stock\n' > "$VISIBLE/data/fonts/files/runtime.ttf"
+MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" LUOSHU_PYTHON=python3 \
+  LUOSHU_UNIVERSAL_TEST_MANAGER=Magisk \
+  LUOSHU_UNIVERSAL_TEST_ASSUME_RO=1 \
+  LUOSHU_UNIVERSAL_TEST_VISIBLE_ROOT="$VISIBLE" \
+  LUOSHU_UNIVERSAL_MOUNT_STATE_ROOT="$TMP/state-dynamic-only" \
+  LUOSHU_UNIVERSAL_TEST_SYSTEM_MOUNT_COMMAND="$TMP/system-mount-ok.sh" \
+  LUOSHU_UNIVERSAL_TEST_SYSTEM_ROLLBACK_COMMAND="$TMP/system-rollback.sh" \
+  LUOSHU_UNIVERSAL_MOUNT_COMMAND="$TMP/fake-mount.sh" \
+  LUOSHU_UNIVERSAL_UMOUNT_COMMAND="$TMP/fake-umount.sh" \
+    sh "$MOD/common/universal_mount_runtime.sh" hook post-fs-data
+test ! -e "$TMP/system-mounted"
+cmp -s "$MOD/.luoshu-payload/.luoshu-dynamic/test.ttf" "$VISIBLE/data/fonts/files/runtime.ttf"
+
+# Restore a partition payload for the rollback transaction case.
+mkdir -p "$MOD/.luoshu-payload/system/fonts"
+printf 'system-font-content\n' > "$MOD/.luoshu-payload/system/fonts/Fake.ttf"
+
 # Dynamic failure must roll back the system payload transaction.
 rm -f "$TMP/system-rollback"
 printf 'stock\n' > "$VISIBLE/data/fonts/files/runtime.ttf"
 set +e
-FAIL_DYNAMIC=1 MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" \
+FAIL_DYNAMIC=1 MODDIR="$MOD" MODULE_DIR="$MOD" CONFIG_DIR="$MOD/config" LUOSHU_PYTHON=python3 \
   LUOSHU_UNIVERSAL_TEST_MANAGER=Magisk \
+  LUOSHU_UNIVERSAL_TEST_ASSUME_RO=1 \
   LUOSHU_UNIVERSAL_TEST_VISIBLE_ROOT="$VISIBLE" \
   LUOSHU_UNIVERSAL_MOUNT_STATE_ROOT="$TMP/state-fail" \
   LUOSHU_UNIVERSAL_TEST_SYSTEM_MOUNT_COMMAND="$TMP/system-mount-ok.sh" \

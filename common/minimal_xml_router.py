@@ -910,6 +910,8 @@ def render_all(
     output_root: Path,
 ) -> dict[str, Any]:
     validate_route_plan(route_plan)
+    if route_plan.get("summary", {}).get("routingComplete") is not True:
+        raise RouterError("XML 路由尚不完整，拒绝生成部分覆盖")
     rendered: list[dict[str, Any]] = []
     for source_xml in sorted(route_plan["documents"]):
         document = route_plan["documents"][source_xml]

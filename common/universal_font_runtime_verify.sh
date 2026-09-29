@@ -15,6 +15,8 @@ ACTIVATED_CONF="$CONFIG_DIR/universal-font-activated.conf"
 OUTPUT_JSON="$CONFIG_DIR/universal-font-runtime-verification.json"
 OUTPUT_CONF="$CONFIG_DIR/universal-font-runtime-verification.conf"
 LIVE_DEPLOYMENT="$MODDIR/.luoshu-payload/.luoshu-runtime/deployment/deployment.json"
+LIVE_FONT_PLAN="$MODDIR/.luoshu-payload/.luoshu-runtime/deployment/font-plan.json"
+LIVE_ARTIFACT_MANIFEST="$MODDIR/.luoshu-payload/.luoshu-runtime/deployment/artifact-manifest.json"
 STATE_ROOT="${LUOSHU_VERIFY_STATE_ROOT:-/data/adb/luoshu/runtime-verify}"
 PID_FILE="$STATE_ROOT/verify.pid"
 FONT_DUMP="$STATE_ROOT/font-manager.txt"
@@ -74,12 +76,15 @@ _uvr_family() {
 
 _uvr_font_plan() {
     [ -n "${LUOSHU_VERIFY_FONT_PLAN:-}" ] && { printf '%s\n' "$LUOSHU_VERIFY_FONT_PLAN"; return 0; }
+    # Phase 8 prefers the contract snapshot sealed into the active payload.
+    [ -s "$LIVE_FONT_PLAN" ] && { printf '%s\n' "$LIVE_FONT_PLAN"; return 0; }
     [ -f "$PLAN_BRIDGE" ] || return 1
     MODDIR="$MODDIR" CONFIG_DIR="$CONFIG_DIR" sh "$PLAN_BRIDGE" path "$1"
 }
 
 _uvr_artifacts() {
     [ -n "${LUOSHU_VERIFY_ARTIFACT_MANIFEST:-}" ] && { printf '%s\n' "$LUOSHU_VERIFY_ARTIFACT_MANIFEST"; return 0; }
+    [ -s "$LIVE_ARTIFACT_MANIFEST" ] && { printf '%s\n' "$LIVE_ARTIFACT_MANIFEST"; return 0; }
     [ -f "$COMPILER_BRIDGE" ] || return 1
     MODDIR="$MODDIR" CONFIG_DIR="$CONFIG_DIR" sh "$COMPILER_BRIDGE" manifest "$1"
 }

@@ -79,6 +79,7 @@ export MODULE_DIR="$MOD"
 export CONFIG_DIR="$MOD/config"
 export LUOSHU_PYTHON=python3
 
+echo "PHASE7_BRIDGE prepare"
 PREP=$(sh "$MOD/common/universal_font_deployment.sh" prepare DemoFamily)
 printf "%s\n" "$PREP" | grep -q '"status":"ok"'
 MANIFEST=$(sh "$MOD/common/universal_font_deployment.sh" manifest DemoFamily)
@@ -86,11 +87,13 @@ PAYLOAD=$(sh "$MOD/common/universal_font_deployment.sh" payload DemoFamily)
 test -s "$MANIFEST"
 test -s "$PAYLOAD/system/fonts/Fake.ttf"
 
+echo "PHASE7_BRIDGE stage-next"
 STAGED=$(sh "$MOD/common/universal_font_deployment.sh" stage-next DemoFamily)
 printf "%s\n" "$STAGED" | grep -q '"state":"staged-next-boot"'
 test -d "$MOD/.luoshu-payload-next"
 test -s "$MOD/config/universal-font-next.conf"
 
+echo "PHASE7_BRIDGE activate"
 MODDIR="$MOD" MODULE_DIR="$MOD" sh -c '. "$1"; universal_font_next_boot_activate' sh "$MOD/common/universal_next_boot.sh"
 test -d "$MOD/.luoshu-payload"
 test ! -e "$MOD/.luoshu-payload-next"
@@ -100,4 +103,5 @@ grep -q '^deploymentId=sha256:test-deployment$' "$MOD/config/universal-font-runt
 test "$(cat "$MOD/config/active_font.conf")" = DemoFamily
 test ! -e "$MOD/config/font_runtime_legacy_v14_4.conf"
 
+echo "PHASE7_BRIDGE assertions-ok"
 echo "universal_font_deployment_bridge_test: PASS"

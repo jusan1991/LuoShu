@@ -169,6 +169,16 @@ def main() -> int:
         assert (payload_root / "system/fonts" / text).is_file()
         assert (payload_root / "vendor/fonts/Vendor-Regular.ttf").is_file()
 
+        contracts = manifest["verificationContracts"]
+        plan_snapshot = payload_root / contracts["fontPlan"]["payloadPath"]
+        artifact_snapshot = payload_root / contracts["artifactManifest"]["payloadPath"]
+        assert plan_snapshot.is_file()
+        assert artifact_snapshot.is_file()
+        assert deployment._sha256(plan_snapshot) == contracts["fontPlan"]["sha256"]
+        assert deployment._sha256(artifact_snapshot) == contracts["artifactManifest"]["sha256"]
+        assert contracts["fontPlan"]["planId"] == font_plan["planId"]
+        assert contracts["artifactManifest"]["manifestId"] == artifact_manifest["manifestId"]
+
         dynamic = manifest["dynamicMounts"][0]
         assert dynamic["targetPath"] == dynamic_logical
         assert dynamic["readOnly"] is True
@@ -195,6 +205,17 @@ def main() -> int:
         }
         assert len({value[0] for value in identities.values()}) == 1
         assert len({value[1] for value in identities.values()}) == 1
+
+        # Tampering with a frozen verification contract is rejected before next boot.
+        original_plan_snapshot = plan_snapshot.read_bytes()
+        plan_snapshot.write_bytes(original_plan_snapshot + b" ")
+        try:
+            deployment.validate_payload_integrity(manifest, payload_root)
+        except deployment.DeploymentError as error:
+            assert "verification contract" in str(error)
+        else:
+            raise AssertionError("tampered verification contract unexpectedly validated")
+        plan_snapshot.write_bytes(original_plan_snapshot)
 
         # Tampering with a staged dynamic artifact is rejected before next boot.
         dynamic_source.write_bytes(dynamic_source.read_bytes() + b"x")

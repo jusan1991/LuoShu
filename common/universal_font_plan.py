@@ -802,7 +802,10 @@ def validate_plan(
         raise UniversalPlanError("Universal FontPlan 版本无效")
     if plan.get("mutatesSystem") is not False:
         raise UniversalPlanError("Phase 4 FontPlan 不得修改系统")
-    if plan.get("summary", {}).get("executableNow") is not False:
+    summary = plan.get("summary")
+    if not isinstance(summary, dict):
+        raise UniversalPlanError("Universal FontPlan 缺少 summary")
+    if summary.get("executableNow") is not False:
         raise UniversalPlanError("Phase 4 FontPlan 不得声明可直接执行")
     device = plan.get("device") if isinstance(plan.get("device"), dict) else {}
     source = plan.get("source") if isinstance(plan.get("source"), dict) else {}
@@ -834,6 +837,11 @@ def validate_plan(
             raise UniversalPlanError(f"未知字体不得自动替换：{path}")
         if role in SPECIALIZED_ROLES and action not in {"compile-specialized", "blocked"}:
             raise UniversalPlanError(f"Clock/Numeric 不得走普通替换：{path}")
+        if role in TEXT_ROLES and action not in {"replace", "compile", "blocked"}:
+            raise UniversalPlanError(f"文本目标包含无效动作：{path}")
+        if role not in PROTECTED_ROLES | TEXT_ROLES | SPECIALIZED_ROLES | {"unknown-protected"}:
+            if action != "preserve":
+                raise UniversalPlanError(f"未知扩展角色不得自动替换：{path}")
         if action in {"replace", "compile", "compile-specialized"} and not isinstance(item.get("source"), dict):
             raise UniversalPlanError(f"替换目标缺少源 face：{path}")
 
@@ -843,6 +851,31 @@ def validate_plan(
     constraints = plan.get("constraints")
     if not isinstance(constraints, dict):
         raise UniversalPlanError("Universal FontPlan 缺少 constraints")
+
+    action_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    compiler_counts: dict[str, int] = {}
+    for item in targets.values():
+        for key, bucket in (
+            ("action", action_counts),
+            ("status", status_counts),
+            ("compiler", compiler_counts),
+        ):
+            value = str(item.get(key) or "unknown")
+            bucket[value] = bucket.get(value, 0) + 1
+    expected_summary = {
+        "slotCount": len(targets),
+        "actionCounts": dict(sorted(action_counts.items())),
+        "statusCounts": dict(sorted(status_counts.items())),
+        "compilerCounts": dict(sorted(compiler_counts.items())),
+        "missingRoleSlotCount": len(missing_role_slots),
+        "executableNow": False,
+    }
+    if summary != expected_summary:
+        raise UniversalPlanError("Universal FontPlan summary 与 targets 不一致")
+    if _int(constraints.get("missingRoleSlotCount"), -1) != len(missing_role_slots):
+        raise UniversalPlanError("Universal FontPlan constraints 与角色缺口不一致")
+
     semantic = {
         "inputs": inputs,
         "buildKey": device.get("buildKey"),

@@ -187,7 +187,7 @@ def source_face() -> dict:
     }
 
 
-def build_font_plan() -> dict:
+def build_font_plan(*, missing_bold_ref: bool = False) -> dict:
     slots = {
         "/system/fonts/Roboto-Regular.ttf": target_slot(
             "/system/fonts/Roboto-Regular.ttf",
@@ -203,7 +203,7 @@ def build_font_plan() -> dict:
             "/system/fonts/Roboto-Bold.ttf",
             family="sans-serif",
             source_xml="/system/etc/fonts.xml",
-            declared="Roboto-Bold.ttf",
+            declared=("Missing-Bold.ttf" if missing_bold_ref else "Roboto-Bold.ttf"),
             weight=700,
         ),
         "/product/fonts/GoogleSans-Medium.ttf": target_slot(
@@ -401,6 +401,15 @@ def main() -> int:
         assert regular["artifact"]["requiredFaceIndex"] == 0
         assert regular["artifact"]["requiredAxes"] == regular["node"]["axes"]
 
+        assert router._artifact_extension(
+            {"source": {"format": "OTF/CFF"}},
+            {"declared": "VendorCollection.otc", "index": 2},
+        ) == ".otc"
+        assert router._artifact_extension(
+            {"source": {"format": "TTF/glyf"}},
+            {"declared": "VendorCollection.ttc", "index": 2},
+        ) == ".ttc"
+
         # Every operation must use a deterministic compiler artifact.
         artifact_map = {}
         route_ids = []
@@ -457,6 +466,21 @@ def main() -> int:
         route2 = router.build_route_plan(font_plan, xml_map, None, False)
         assert route2["routeId"] == route["routeId"]
 
+        alternate_system = temp / "alternate-system.xml"
+        alternate_product = temp / "alternate-product.xml"
+        alternate_system.write_bytes(system_xml.read_bytes())
+        alternate_product.write_bytes(product_xml.read_bytes())
+        route3 = router.build_route_plan(
+            font_plan,
+            {
+                "/system/etc/fonts.xml": alternate_system,
+                "/product/etc/fonts_customization.xml": alternate_product,
+            },
+            None,
+            False,
+        )
+        assert route3["routeId"] == route["routeId"], "local snapshot path must not affect routeId"
+
         # Route JSON tampering must fail integrity validation.
         tampered = copy.deepcopy(route)
         tampered["documents"]["/system/etc/fonts.xml"]["operations"][0]["mutation"]["preserveAxisChildren"] = False
@@ -479,20 +503,26 @@ def main() -> int:
         else:
             raise AssertionError("stale XML snapshot unexpectedly rendered")
 
-        # Exact-node routing is fail-closed: a declared filename mismatch creates
-        # a diagnostic plan but partial XML rendering is forbidden.
-        mismatch_plan = build_font_plan()
-        mismatch_target = mismatch_plan["targets"]["/system/fonts/Roboto-Bold.ttf"]
-        mismatch_target["xmlRefs"][0]["declared"] = "Missing-Bold.ttf"
-        # Re-sign the Phase 4 plan after changing the synthetic fixture by rebuilding
-        # its deterministic integrity fields through the original topology path.
-        # Direct tampering must fail before Phase 5 can accept it.
+        # Exact-node routing is fail-closed even for a fully valid Phase 4 plan:
+        # if the frozen declared filename cannot be uniquely located in stock XML,
+        # the diagnostic plan is incomplete and partial XML rendering is forbidden.
+        mismatch_plan = build_font_plan(missing_bold_ref=True)
+        universal_font_plan.validate_plan(mismatch_plan)
+        mismatch_route = router.build_route_plan(mismatch_plan, xml_map, None, False)
+        assert mismatch_route["summary"]["routingComplete"] is False
+        assert mismatch_route["summary"]["unresolvedCount"] == 1
+        assert mismatch_route["unresolved"][0]["reason"] == "xml-node-missing"
+        mismatch_artifacts = {}
+        for document in mismatch_route["documents"].values():
+            for operation in document["operations"]:
+                artifact = operation["artifact"]
+                mismatch_artifacts[artifact["artifactId"]] = artifact["suggestedFileName"]
         try:
-            router.build_route_plan(mismatch_plan, xml_map, None, False)
-        except router.RouterError:
-            pass
+            router.render_all(mismatch_route, mismatch_artifacts, temp / "partial-output")
+        except router.RouterError as error:
+            assert "尚不完整" in str(error)
         else:
-            raise AssertionError("tampered FontPlan unexpectedly accepted")
+            raise AssertionError("incomplete XML route unexpectedly rendered")
 
     print("minimal_xml_router_test: PASS")
     return 0

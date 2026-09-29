@@ -80,7 +80,7 @@ git -C "$WOFF2_SRC/brotli" checkout -q --detach FETCH_HEAD
 test "$(git -C "$WOFF2_SRC" rev-parse HEAD)" = "$WOFF2_COMMIT"
 test "$(git -C "$WOFF2_SRC/brotli" rev-parse HEAD)" = "$WOFF2_BROTLI_COMMIT"
 
-make -C "$WOFF2_SRC" -j2 woff2_decompress \
+make -C "$WOFF2_SRC" -j2 all \
   CC="$CC" CXX="$CXX" AR="$AR" \
   COMMON_FLAGS='-O2 -fPIE -fno-omit-frame-pointer -no-canonical-prefixes -DFONT_COMPRESSION_BIN -D__STDC_FORMAT_MACROS' \
   LFLAGS='-fPIE -pie -static-libstdc++ -Wl,--build-id=none -Wl,-z,relro,-z,now' >/dev/null

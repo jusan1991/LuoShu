@@ -137,7 +137,11 @@ def convert(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     source_hash = sha256(source)
-    decoder = woff2_decoder or DEFAULT_WOFF2_DECODER
+    decoder = (
+        woff2_decoder
+        or (Path(os.environ["LUOSHU_WOFF2_DECODER"]) if os.environ.get("LUOSHU_WOFF2_DECODER") else None)
+        or DEFAULT_WOFF2_DECODER
+    )
     decode_method = "fonttools"
     raw_temp: Path | None = None
 

@@ -369,6 +369,7 @@ def build_topology(
             if family not in merged_families:
                 merged_families.append(family)
         entry["families"] = sorted(merged_families)
+        entry["legacyReplaceable"] = path in raw_slots
         entry["runtimeEvidence"] = {
             "fontManager": path in manager_slots,
             "mount": path in mount_slots,

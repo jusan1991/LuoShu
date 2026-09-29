@@ -114,16 +114,25 @@ status_json() {
     _universal_runtime="$MODDIR/config/universal-font-runtime.conf"
     _universal_verification="$MODDIR/config/universal-font-runtime-verification.conf"
     _verification_grade=''
-    if [ -s "$_universal_runtime" ] && [ -s "$_universal_verification" ]; then
+    if [ -s "$_universal_runtime" ]; then
         _verification_file="$_universal_verification"
-        _verification_grade="$(read_prop "$_verification_file" grade)"
-        _verification_reason="$(read_prop "$_verification_file" reason)"
-        _verification_active="$(read_prop "$_verification_file" activeFont)"
+        _verification_reason=''
+        _verification_active=''
+        if [ -s "$_universal_verification" ]; then
+            _verification_grade="$(read_prop "$_verification_file" grade)"
+            _verification_reason="$(read_prop "$_verification_file" reason)"
+            _verification_active="$(read_prop "$_verification_file" activeFont)"
+        fi
         case "$_verification_grade" in
             PASS) _verification_state=verified; _verification_mode=universal-pass ;;
             WARN) _verification_state=warning; _verification_mode=universal-warn ;;
             FAIL) _verification_state=failed; _verification_mode=universal-fail ;;
-            *) _verification_state=pending; _verification_mode=universal-pending ;;
+            *)
+                _verification_grade=PENDING
+                _verification_state=pending
+                _verification_mode=universal-pending
+                [ -n "$_verification_reason" ] || _verification_reason=awaiting-runtime-verification
+                ;;
         esac
         _mount_state="$(read_prop "$MODDIR/config/universal-font-mount.conf" state)"
         _mount_failed="$(read_prop "$MODDIR/config/universal-font-mount.conf" error)"

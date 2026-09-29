@@ -115,6 +115,8 @@ common/origin_flyme_global.sh
 common/rom_adapters.sh
 common/util_functions.sh
 common/util_functions_core.sh
+common/universal_font_plan.py
+common/universal_font_plan.sh
 common/weighted_mix_task.sh
 common/python
 .luoshu-runtime

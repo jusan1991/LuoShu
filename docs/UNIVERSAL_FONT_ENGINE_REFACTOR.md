@@ -204,7 +204,7 @@ Shadow 动作：
 - Phase 5 不发布系统 XML、不 mount，仍强制 `mutatesSystem=false`、`executableNow=false`
 
 ### Phase 6 — Metrics / Variable Font Compiler
-状态：未开始
+状态：**进行中 / universal-font-artifacts-v1**
 
 目标：
 
@@ -218,6 +218,19 @@ Shadow 动作：
 - 多字重
 - UPEM / ascent / descent / lineGap / capHeight / xHeight
 - 数字宽度和 clock exact-width
+
+标准产物：
+
+- `config/universal-font-artifact-manifests/*.json`
+- 私有编译缓存 `cache/universal-font-artifacts/*`
+- Schema：`universal-font-artifacts-v1`
+- Phase 6 只能编译 Phase 4/5 已冻结的 target/artifact contract，不得重新选择目标槽位
+- 普通静态 UI 优先保留用户字体自身 GSUB/GPOS，再按原厂脚本几何与 line contract 编译
+- Clock/Numeric、collection、XML 固定 axis 目标优先保留原厂容器/advance/face contract，只替换目标脚本字形
+- 纯物理 variable 目标只有在 axis range 与天然几何均通过原厂校验时才保持 variable；不允许静默静态化
+- TTF/glyf 与 OTF/CFF/CFF2 都必须显式处理，禁止靠扩展名伪装轮廓格式
+- TTC/OTC 必须保留非目标 face，按 FontPlan/RoutePlan 指定 face index 编译
+- 编译产物仍不得发布或 mount；Phase 6 强制 `mutatesSystem=false`、`executableNow=false`
 
 ### Phase 7 — Unified Mount Backends
 状态：未开始

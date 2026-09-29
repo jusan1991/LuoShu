@@ -16,8 +16,10 @@ sys.path.insert(0, str(ROOT / "common"))
 import universal_font_runtime_verify as runtime_verify
 
 
-def make_font(path: Path, family: str, weight: int = 400) -> None:
+def make_font(path: Path, family: str, weight: int = 400, *, drop_digit: str = "") -> None:
     points = [*range(ord("0"), ord("9") + 1), ord("A"), ord("Z"), ord("a"), ord("z")]
+    if drop_digit:
+        points = [cp for cp in points if cp != ord(drop_digit)]
     cmap = {cp: f"u{cp:04X}" for cp in points}
     order = [".notdef", *cmap.values()]
     builder = FontBuilder(1000, isTTF=True)
@@ -227,6 +229,44 @@ def main() -> int:
         )
         assert failed["grade"] == "FAIL", failed
         assert any(reason.startswith("visible-file-hash-mismatch:") for reason in failed["failures"]), failed
+
+        partial_dynamic = visible / "data/fonts/files/PartialDigits.ttf"
+        make_font(partial_dynamic, "Partial Digits", drop_digit="7")
+        partial_sha = sha256(partial_dynamic)
+        partial_plan = deepcopy(plan)
+        partial_artifacts = deepcopy(artifacts)
+        partial_deployment = deepcopy(deployment)
+        partial_target = partial_plan["targets"].pop(dynamic_path)
+        partial_target["path"] = "/data/fonts/files/PartialDigits.ttf"
+        partial_target["families"] = ["Partial Digits"]
+        partial_plan["targets"]["/data/fonts/files/PartialDigits.ttf"] = partial_target
+        partial_artifact = partial_artifacts["artifacts"][1]
+        partial_artifact["targetPath"] = "/data/fonts/files/PartialDigits.ttf"
+        partial_artifact["sha256"] = partial_sha
+        partial_deployment["dynamicMounts"][0]["targetPath"] = "/data/fonts/files/PartialDigits.ttf"
+        partial_deployment["dynamicMounts"][0]["sha256"] = partial_sha
+        partial_mounts = {
+            str(partial_dynamic): {
+                "readOnly": True,
+                "source": str(temp / "payload/.luoshu-dynamic/ufc-dynamic.ttf"),
+                "options": ["ro"],
+                "superOptions": ["ro"],
+            }
+        }
+        partial_failed = runtime_verify.verify(
+            partial_plan,
+            partial_artifacts,
+            partial_deployment,
+            runtime_conf=runtime_conf,
+            mount_state=mount_state,
+            font_dump="PartialDigits.ttf Partial Digits",
+            mountinfo=partial_mounts,
+            active_font="Test Family",
+            visible_root=visible,
+            boot_id="boot-partial-digits",
+        )
+        assert partial_failed["grade"] == "FAIL", partial_failed
+        assert any(reason.startswith("coverage-digits-incomplete:") for reason in partial_failed["failures"]), partial_failed
 
         cjk_plan = deepcopy(plan)
         cjk_plan["targets"][physical_path]["role"] = "cjk"

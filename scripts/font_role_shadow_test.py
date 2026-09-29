@@ -54,7 +54,7 @@ def slot(
             "resolvedPath": "/system/fonts/" + name,
         }]
     if replaceable is not None:
-        value["replaceable"] = replaceable
+        value["legacyReplaceable"] = replaceable
     return value
 
 

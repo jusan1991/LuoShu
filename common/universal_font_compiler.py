@@ -756,11 +756,11 @@ def _apply_cff_source_transforms(font: TTFont, geometry: dict[str, Any]) -> dict
 
     changed = 0
     exact = "clock" in set(geometry.get("roles") or [])
+    upem_scale = float(geometry.get("upemScale") or 1.0)
     for glyph_name, probe in probe_map.items():
         transform_data = slot_build.transform_for_probe(geometry, probe)
         if not isinstance(transform_data, dict) or glyph_name not in recordings or glyph_name not in hmtx:
             continue
-        upem_scale = float(geometry.get("upemScale") or 1.0)
         scale_y = _float(transform_data.get("relativeScaleY"), 1.0) or 1.0
         # apply_line_contract has already scaled UPEM, so remaining CFF transform
         # must use relative Y/X values, mirroring the glyf builder.

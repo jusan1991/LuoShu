@@ -79,6 +79,31 @@ def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def _topology_digest(topology: dict[str, Any]) -> str:
+    material = {
+        "schema": topology.get("schema"),
+        "topologyRevision": topology.get("topologyRevision"),
+        "buildKey": topology.get("buildKey"),
+        "romKind": topology.get("romKind"),
+        "slots": topology.get("slots"),
+        "families": topology.get("families"),
+        "xmlAliases": topology.get("xmlAliases"),
+        "unresolvedXmlRefs": topology.get("unresolvedXmlRefs"),
+    }
+    return f"sha256:{_canonical_hash(material)}"
+
+
+def _roles_digest(roles: dict[str, Any]) -> str:
+    material = {
+        "schema": roles.get("schema"),
+        "roleRevision": roles.get("roleRevision"),
+        "buildKey": roles.get("buildKey"),
+        "romKind": roles.get("romKind"),
+        "slots": roles.get("slots"),
+    }
+    return f"sha256:{_canonical_hash(material)}"
+
+
 def _topology_slots(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:
     raw = topology.get("slots")
     if not isinstance(raw, dict):
@@ -587,11 +612,18 @@ def build_plan(
             value = str(item.get(key) or "unknown")
             bucket[value] = bucket.get(value, 0) + 1
 
+    inputs = {
+        "topologyDigest": _topology_digest(topology),
+        "rolesDigest": _roles_digest(roles),
+        "sourceProfileId": profile_id,
+        "sourceProfileRevision": profile.get("profileRevision"),
+    }
     semantic = {
+        "inputs": inputs,
         "buildKey": build_key,
-        "profileId": profile_id,
         "topologyRevision": topology.get("topologyRevision"),
         "roleRevision": roles.get("roleRevision"),
+        "missingRoleSlots": missing_role_slots,
         "targets": targets,
     }
     plan_id = f"sha256:{_canonical_hash(semantic)}"
@@ -602,6 +634,7 @@ def build_plan(
         "mutatesSystem": False,
         "generatedAt": int(time.time()),
         "planId": plan_id,
+        "inputs": inputs,
         "device": {
             "buildKey": build_key,
             "romKind": str(topology.get("romKind") or "generic"),
@@ -626,7 +659,13 @@ def build_plan(
         "missingRoleSlots": missing_role_slots,
         "targets": targets,
     }
-    validate_plan(plan, expected_build_key=build_key, expected_profile_id=profile_id)
+    validate_plan(
+        plan,
+        expected_build_key=build_key,
+        expected_profile_id=profile_id,
+        expected_topology_digest=inputs["topologyDigest"],
+        expected_roles_digest=inputs["rolesDigest"],
+    )
     return plan
 
 
@@ -634,6 +673,8 @@ def validate_plan(
     plan: dict[str, Any],
     expected_build_key: str | None = None,
     expected_profile_id: str | None = None,
+    expected_topology_digest: str | None = None,
+    expected_roles_digest: str | None = None,
 ) -> None:
     if plan.get("schema") != SCHEMA or plan.get("state") != "planned":
         raise UniversalPlanError("Universal FontPlan 格式无效")
@@ -650,6 +691,11 @@ def validate_plan(
             raise UniversalPlanError("Universal FontPlan 与设备 buildKey 不一致")
     if expected_profile_id and source.get("profileId") != expected_profile_id:
         raise UniversalPlanError("Universal FontPlan 与源字体 Profile 不一致")
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), dict) else {}
+    if expected_topology_digest and inputs.get("topologyDigest") != expected_topology_digest:
+        raise UniversalPlanError("Universal FontPlan 与设备拓扑摘要不一致")
+    if expected_roles_digest and inputs.get("rolesDigest") != expected_roles_digest:
+        raise UniversalPlanError("Universal FontPlan 与角色摘要不一致")
     targets = plan.get("targets")
     if not isinstance(targets, dict):
         raise UniversalPlanError("Universal FontPlan 缺少 targets")
@@ -666,6 +712,21 @@ def validate_plan(
             raise UniversalPlanError(f"Clock/Numeric 不得走普通替换：{path}")
         if action in {"replace", "compile", "compile-specialized"} and not isinstance(item.get("source"), dict):
             raise UniversalPlanError(f"替换目标缺少源 face：{path}")
+
+    missing_role_slots = plan.get("missingRoleSlots")
+    if not isinstance(missing_role_slots, list):
+        raise UniversalPlanError("Universal FontPlan 缺少 missingRoleSlots")
+    semantic = {
+        "inputs": inputs,
+        "buildKey": device.get("buildKey"),
+        "topologyRevision": device.get("topologyRevision"),
+        "roleRevision": device.get("roleRevision"),
+        "missingRoleSlots": missing_role_slots,
+        "targets": targets,
+    }
+    expected_plan_id = f"sha256:{_canonical_hash(semantic)}"
+    if plan.get("planId") != expected_plan_id:
+        raise UniversalPlanError("Universal FontPlan planId 完整性校验失败")
 
 
 def main() -> int:
@@ -684,7 +745,13 @@ def main() -> int:
         build_key, profile_id = _validate_inputs(topology, roles, profile)
         if args.validate is not None:
             plan = _load(args.validate)
-            validate_plan(plan, build_key, profile_id)
+            validate_plan(
+                plan,
+                build_key,
+                profile_id,
+                _topology_digest(topology),
+                _roles_digest(roles),
+            )
         else:
             plan = build_plan(topology, roles, profile)
             if args.output is not None:

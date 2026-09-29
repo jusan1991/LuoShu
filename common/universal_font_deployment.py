@@ -354,6 +354,27 @@ def build_deployment(
 
         _write_dynamic_runtime(stage, dynamic_mounts)
 
+        # Freeze the exact Phase 4/6 verification contracts inside this payload.
+        # Phase 8 must verify the deployment that was actually staged, not a
+        # mutable config copy that may be rebuilt after stage-next.
+        contract_root = stage / ".luoshu-runtime/deployment"
+        plan_snapshot = contract_root / "font-plan.json"
+        artifact_snapshot = contract_root / "artifact-manifest.json"
+        _atomic_json(plan_snapshot, font_plan)
+        _atomic_json(artifact_snapshot, artifact_manifest)
+        verification_contracts = {
+            "fontPlan": {
+                "payloadPath": ".luoshu-runtime/deployment/font-plan.json",
+                "sha256": _sha256(plan_snapshot),
+                "planId": font_plan.get("planId"),
+            },
+            "artifactManifest": {
+                "payloadPath": ".luoshu-runtime/deployment/artifact-manifest.json",
+                "sha256": _sha256(artifact_snapshot),
+                "manifestId": artifact_manifest.get("manifestId"),
+            },
+        }
+
         file_list = sorted(files.values(), key=lambda value: value["logicalPath"])
         payload_digest = _payload_digest(file_list, dynamic_mounts)
         partitions = sorted({
@@ -369,6 +390,7 @@ def build_deployment(
             "files": file_list,
             "dynamicMounts": dynamic_mounts,
             "backendProfiles": BACKEND_PROFILES,
+            "verificationContracts": verification_contracts,
         }
         deployment_id = f"sha256:{_canonical_hash(deployment_semantic)}"
         payload = {
@@ -398,6 +420,7 @@ def build_deployment(
             "backendProfiles": copy.deepcopy(BACKEND_PROFILES),
             "files": file_list,
             "dynamicMounts": dynamic_mounts,
+            "verificationContracts": verification_contracts,
         }
 
         runtime_manifest = stage / ".luoshu-runtime/deployment/deployment.json"
@@ -484,6 +507,31 @@ def validate_payload_integrity(
     expected_digest = _payload_digest(files, dynamic)
     if deployment.get("payloadDigest") != expected_digest:
         raise DeploymentError("Deployment payloadDigest 完整性校验失败")
+
+    verification_contracts = deployment.get("verificationContracts")
+    if verification_contracts is not None:
+        if not isinstance(verification_contracts, dict):
+            raise DeploymentError("Deployment verificationContracts 无效")
+        specs = (
+            ("fontPlan", "planId", deployment.get("fontPlanId"), ".luoshu-runtime/deployment/font-plan.json"),
+            ("artifactManifest", "manifestId", deployment.get("artifactManifestId"), ".luoshu-runtime/deployment/artifact-manifest.json"),
+        )
+        for name, id_key, expected_id_value, expected_path in specs:
+            contract = verification_contracts.get(name)
+            if not isinstance(contract, dict):
+                raise DeploymentError(f"Deployment verification contract 缺失：{name}")
+            if contract.get("payloadPath") != expected_path:
+                raise DeploymentError(f"Deployment verification contract 路径无效：{name}")
+            if contract.get(id_key) != expected_id_value:
+                raise DeploymentError(f"Deployment verification contract 身份不一致：{name}")
+            digest = str(contract.get("sha256") or "")
+            if len(digest) != 64:
+                raise DeploymentError(f"Deployment verification contract 摘要无效：{name}")
+            if payload_root is not None:
+                snapshot = payload_root / expected_path
+                if not snapshot.is_file() or _sha256(snapshot) != digest:
+                    raise DeploymentError(f"Deployment verification contract 缺失或摘要变化：{name}")
+
     semantic = {
         "fontPlanId": deployment.get("fontPlanId"),
         "routeId": deployment.get("routeId"),
@@ -493,6 +541,8 @@ def validate_payload_integrity(
         "dynamicMounts": dynamic,
         "backendProfiles": BACKEND_PROFILES,
     }
+    if verification_contracts is not None:
+        semantic["verificationContracts"] = verification_contracts
     expected_id = f"sha256:{_canonical_hash(semantic)}"
     if deployment.get("deploymentId") != expected_id:
         raise DeploymentError("Deployment deploymentId 完整性校验失败")

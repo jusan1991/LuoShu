@@ -100,7 +100,7 @@ _profile_validate_family() {
 _profile_convert_web() {
     _pcw_name="$1"
     case "$_pcw_name" in
-        ""|*"/"*|*"\"*|*".."*) printf '{"status":"error","message":"文件名无效"}\n'; return 1 ;;
+        ''|*/*|*..*) printf '{"status":"error","message":"文件名无效"}\n'; return 1 ;;
     esac
     _pcw_source="$USER_FONTS_DIR/$_pcw_name"
     [ -f "$_pcw_source" ] || {

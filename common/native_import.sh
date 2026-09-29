@@ -199,7 +199,7 @@ import_web_font_file() {
         fail_json "网页字体转换组件不可用"
         return
     }
-    _iwf_tmp="$MODDIR/cache/web-font-import.$"
+    _iwf_tmp="$MODDIR/cache/web-font-import.$$"
     rm -rf "$_iwf_tmp" 2>/dev/null || true
     mkdir -p "$_iwf_tmp" 2>/dev/null || { fail_json "无法创建网页字体转换目录"; return; }
 

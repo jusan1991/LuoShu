@@ -7,6 +7,7 @@ set +e
 MODDIR="${0%/*}"
 UNIVERSAL_MODE="$MODDIR/config/universal-font-runtime.conf"
 UNIVERSAL_RUNTIME="$MODDIR/common/universal_mount_runtime.sh"
+UNIVERSAL_VERIFY="$MODDIR/common/universal_font_runtime_verify.sh"
 LEGACY_MODE="$MODDIR/config/font_runtime_legacy_v14_4.conf"
 V4_SERVICE="$MODDIR/.luoshu-runtime/core/service.sh"
 
@@ -16,6 +17,10 @@ if [ -s "$UNIVERSAL_MODE" ]; then
     # must not run once the universal deployment pipeline is active.
     [ -f "$UNIVERSAL_RUNTIME" ] && MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
         sh "$UNIVERSAL_RUNTIME" service >/dev/null 2>&1 || true
+    # Phase 8 runs once per boot after boot-complete. It consumes only the frozen
+    # Phase 4/6/7 artifacts and never starts a resident target-discovery loop.
+    [ -f "$UNIVERSAL_VERIFY" ] && MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
+        sh "$UNIVERSAL_VERIFY" schedule >/dev/null 2>&1 || true
     exit 0
 fi
 

@@ -217,11 +217,6 @@ universal_font_mount_hook() {
     [ "$(_ufmr_value "$RUNTIME_CONF" pipeline)" = universal-font-deployment-v1 ] || return 1
     [ -d "$PAYLOAD" ] || return 1
     [ -s "$PAYLOAD/.luoshu-runtime/deployment/deployment.json" ] || return 1
-    _ufmr_validate_payload || {
-        _ufmr_write_state failed unknown "$_ufmr_hook" 0 payload-integrity-failed
-        _ufmr_log "payload integrity validation failed before mount"
-        return 1
-    }
     if [ -n "${LUOSHU_UNIVERSAL_TEST_MANAGER:-}" ]; then
         _ufmr_manager="$LUOSHU_UNIVERSAL_TEST_MANAGER"
     else
@@ -234,6 +229,12 @@ universal_font_mount_hook() {
         _ufmr_stage=$(_ufmr_stage_for_manager "$_ufmr_manager")
     fi
     [ "$_ufmr_stage" = "$_ufmr_hook" ] || return 2
+
+    _ufmr_validate_payload || {
+        _ufmr_write_state failed "$_ufmr_manager" "$_ufmr_stage" 0 payload-integrity-failed
+        _ufmr_log "payload integrity validation failed before mount"
+        return 1
+    }
 
     _ufmr_system_mounted=0
     if _ufmr_has_partition_payload; then

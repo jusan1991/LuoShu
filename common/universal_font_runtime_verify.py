@@ -303,10 +303,12 @@ def _assess_font(
         coverage_report[group] = {"hits": hits, "total": len(probes)}
         if hits == 0:
             failures.append(f"coverage-{group}-missing:{logical_path}")
+        elif group == "digits" and hits != len(probes):
+            # Numeric and clock contracts must never accept a partially covered
+            # decimal set; one missing digit is enough to fall back at runtime.
+            failures.append(f"coverage-digits-incomplete:{logical_path}")
         elif hits < len(probes):
             warnings.append(f"coverage-{group}-partial:{logical_path}")
-        elif group == "digits" and hits != len(probes):
-            failures.append(f"coverage-digits-incomplete:{logical_path}")
     report["coverage"] = coverage_report
 
     axes = snapshot["axes"]

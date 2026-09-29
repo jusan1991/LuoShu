@@ -351,6 +351,10 @@ def main() -> int:
         assert ui_cjk["source"]["uid"] == "sha256:cjk-file:face:0"
         assert "metrics-normalization" in ui_cjk["requirements"]
         assert "variable-instance" in ui_cjk["requirements"]
+        assert ui_cjk["targetContract"]["weight"] == 400
+        assert ui_cjk["targetContract"]["coverage"]["hasHan"] is True
+        assert ui_cjk["source"]["metrics"]["unitsPerEm"] == 1000
+        assert ui_cjk["source"]["capabilities"]["cjkUi"] is True
 
         latin_bold = plan["targets"]["/system/fonts/UiLatin-Bold.ttf"]
         assert latin_bold["action"] == "compile"

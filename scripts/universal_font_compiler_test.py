@@ -412,6 +412,25 @@ def main() -> int:
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         compiler.validate_manifest(manifest, font_plan, route_plan)
 
+        tampered_manifest = json.loads(json.dumps(manifest))
+        tampered_manifest["artifacts"][0]["bytes"] += 1
+        try:
+            compiler.validate_manifest(tampered_manifest, font_plan, route_plan)
+        except compiler.CompilerError as error:
+            assert "manifestId" in str(error)
+        else:
+            raise AssertionError("tampered compiler manifest unexpectedly validated")
+
+        bad_map = json.loads(json.dumps(manifest))
+        first_id = next(iter(bad_map["artifactMap"]))
+        bad_map["artifactMap"][first_id] = "wrong.ttf"
+        try:
+            compiler.validate_manifest(bad_map, font_plan, route_plan)
+        except compiler.CompilerError as error:
+            assert "artifactMap" in str(error)
+        else:
+            raise AssertionError("tampered artifactMap unexpectedly validated")
+
     print("universal_font_compiler_test: PASS")
     return 0
 

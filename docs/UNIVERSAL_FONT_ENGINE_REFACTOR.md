@@ -233,7 +233,7 @@ Shadow 动作：
 - 编译产物仍不得发布或 mount；Phase 6 强制 `mutatesSystem=false`、`executableNow=false`
 
 ### Phase 7 — Unified Mount Backends
-状态：未开始
+状态：**进行中 / universal-font-deployment-v1**
 
 上层只接受同一份 `FontPlan`。
 
@@ -244,6 +244,17 @@ Shadow 动作：
 - APatch
 
 禁止三套字体判断逻辑。
+
+标准产物：
+
+- `config/universal-font-deployments/*/deployment.json`
+- Schema：`universal-font-deployment-v1`
+- Magisk / KernelSU / APatch 必须消费完全相同的 payloadDigest；差异只能是 hook 时机
+- XML route artifact、physical-only artifact、`/data/fonts` dynamic artifact 均来自 Phase 6 manifest，Mount Backend 不得重新扫描或重新选槽
+- XML route artifact 放在原 target font 目录并由 Phase 5 XML 指向；physical-only 保持原逻辑路径；dynamic artifact 只读 bind 回原 `/data/fonts` 目标
+- system/product/vendor 等 payload 与 dynamic bind 必须视为同一事务；任一动态 bind 失败必须回滚本次 systemless mount
+- 新部署通过 `.luoshu-payload-next` 在 next boot 原子切换，旧 payload 保留到 Phase 8 验证完成
+- 当前迁移阶段正式换字体按钮仍不自动 stage-next；只有显式内部 stage-next 才进入新 runtime
 
 ### Phase 8 — Runtime Verification
 状态：未开始

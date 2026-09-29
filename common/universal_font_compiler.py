@@ -1029,6 +1029,25 @@ def _collect_units(font_plan: dict[str, Any], route_plan: dict[str, Any]) -> lis
         if "physical-slot" not in unit["deploymentKinds"]:
             unit["deploymentKinds"].append("physical-slot")
 
+    for target_path in sorted(deferred):
+        target = targets.get(target_path)
+        if not isinstance(target, dict):
+            raise CompilerError(f"RoutePlan dynamic target 不存在于 FontPlan：{target_path}")
+        if str(target.get("action") or "") not in ROUTABLE_ACTIONS:
+            raise CompilerError(f"RoutePlan dynamic target 不是可编译目标：{target_path}")
+        if not target_path.startswith("/data/fonts/"):
+            raise CompilerError(f"dynamic target 不在 /data/fonts：{target_path}")
+        artifact = _physical_artifact(target, font_plan)
+        artifact_id = str(artifact["artifactId"])
+        unit = units.setdefault(artifact_id, {
+            "artifact": artifact,
+            "target": copy.deepcopy(target),
+            "deploymentKinds": [],
+            "routeNodes": [],
+        })
+        if "dynamic-slot" not in unit["deploymentKinds"]:
+            unit["deploymentKinds"].append("dynamic-slot")
+
     for unit in units.values():
         unit["deploymentKinds"].sort()
         unit["routeNodes"].sort(key=lambda item: (item["sourceXml"], item["ordinal"]))
@@ -1681,9 +1700,14 @@ def compile_all(
     ready = sum(item["status"] == "ready" for item in artifacts)
     blocked = sum(item["status"] == "blocked" for item in artifacts)
     deferred = list(route_plan.get("deferredDynamicTargets") or [])
+    compiled_dynamic = {
+        str(item.get("targetPath") or "")
+        for item in artifacts
+        if item.get("status") == "ready" and "dynamic-slot" in (item.get("deploymentKinds") or [])
+    }
     deployment_ready = (
         blocked == 0
-        and not deferred
+        and compiled_dynamic == deferred
         and route_plan.get("summary", {}).get("routingComplete") is True
     )
     manifest_id = _manifest_id(
@@ -1702,6 +1726,11 @@ def compile_all(
         for item in artifacts
         if item.get("status") == "ready" and "physical-slot" in (item.get("deploymentKinds") or [])
     }
+    dynamic_target_map = {
+        str(item["targetPath"]): str(item["artifactId"])
+        for item in artifacts
+        if item.get("status") == "ready" and "dynamic-slot" in (item.get("deploymentKinds") or [])
+    }
     return {
         "schema": SCHEMA,
         "compilerRevision": COMPILER_REVISION,
@@ -1716,12 +1745,14 @@ def compile_all(
             "readyCount": ready,
             "blockedCount": blocked,
             "deferredDynamicTargetCount": len(deferred),
+            "compiledDynamicTargetCount": len(dynamic_target_map),
             "deploymentReady": deployment_ready,
             "executableNow": False,
         },
         "deferredDynamicTargets": deferred,
         "artifactMap": dict(sorted(artifact_map.items())),
         "physicalTargetMap": dict(sorted(physical_target_map.items())),
+        "dynamicTargetMap": dict(sorted(dynamic_target_map.items())),
         "artifacts": artifacts,
     }
 
@@ -1749,11 +1780,13 @@ def validate_manifest(
         raise CompilerError("Phase 6 不得声明可直接执行")
     artifact_map = manifest.get("artifactMap")
     physical_map = manifest.get("physicalTargetMap")
-    if not isinstance(artifact_map, dict) or not isinstance(physical_map, dict):
-        raise CompilerError("Artifact manifest 缺少 artifactMap/physicalTargetMap")
+    dynamic_map = manifest.get("dynamicTargetMap")
+    if not isinstance(artifact_map, dict) or not isinstance(physical_map, dict) or not isinstance(dynamic_map, dict):
+        raise CompilerError("Artifact manifest 缺少 artifactMap/physicalTargetMap/dynamicTargetMap")
     ids: set[str] = set()
     expected_artifact_map: dict[str, str] = {}
     expected_physical_map: dict[str, str] = {}
+    expected_dynamic_map: dict[str, str] = {}
     ready = blocked = 0
     for artifact in artifacts:
         if not isinstance(artifact, dict):
@@ -1771,6 +1804,8 @@ def validate_manifest(
             expected_artifact_map[artifact_id] = path.name
             if "physical-slot" in (artifact.get("deploymentKinds") or []):
                 expected_physical_map[str(artifact.get("targetPath") or "")] = artifact_id
+            if "dynamic-slot" in (artifact.get("deploymentKinds") or []):
+                expected_dynamic_map[str(artifact.get("targetPath") or "")] = artifact_id
         elif status == "blocked":
             blocked += 1
             if not str(artifact.get("reason") or ""):
@@ -1783,9 +1818,10 @@ def validate_manifest(
         "readyCount": ready,
         "blockedCount": blocked,
         "deferredDynamicTargetCount": len(manifest.get("deferredDynamicTargets") or []),
+        "compiledDynamicTargetCount": len(expected_dynamic_map),
         "deploymentReady": (
             blocked == 0
-            and not (manifest.get("deferredDynamicTargets") or [])
+            and set(expected_dynamic_map) == set(manifest.get("deferredDynamicTargets") or [])
             and route_plan.get("summary", {}).get("routingComplete") is True
         ),
         "executableNow": False,
@@ -1796,6 +1832,8 @@ def validate_manifest(
         raise CompilerError("Artifact manifest artifactMap 与 ready artifacts 不一致")
     if physical_map != dict(sorted(expected_physical_map.items())):
         raise CompilerError("Artifact manifest physicalTargetMap 与 ready artifacts 不一致")
+    if dynamic_map != dict(sorted(expected_dynamic_map.items())):
+        raise CompilerError("Artifact manifest dynamicTargetMap 与 ready artifacts 不一致")
     expected_manifest_id = _manifest_id(
         str(font_plan.get("planId") or ""),
         str(route_plan.get("routeId") or ""),

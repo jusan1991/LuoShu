@@ -417,11 +417,8 @@ def build_deployment(
             shutil.rmtree(stage, ignore_errors=True)
 
 
-def validate_deployment(
+def validate_payload_integrity(
     deployment: dict[str, Any],
-    font_plan: dict[str, Any],
-    route_plan: dict[str, Any],
-    artifact_manifest: dict[str, Any],
     payload_root: Path | None = None,
 ) -> None:
     if deployment.get("schema") != SCHEMA:
@@ -430,6 +427,96 @@ def validate_deployment(
         raise DeploymentError("Deployment revision 无效")
     if deployment.get("mutatesSystem") is not False or deployment.get("backendNeutral") is not True:
         raise DeploymentError("Deployment manifest 安全属性无效")
+    if deployment.get("backendProfiles") != BACKEND_PROFILES:
+        raise DeploymentError("Deployment backend profiles 已被修改")
+
+    files = deployment.get("files")
+    dynamic = deployment.get("dynamicMounts")
+    summary = deployment.get("summary")
+    if not isinstance(files, list) or not isinstance(dynamic, list) or not isinstance(summary, dict):
+        raise DeploymentError("Deployment manifest 结构无效")
+
+    seen_logical: set[str] = set()
+    partitions: set[str] = set()
+    for item in files:
+        if not isinstance(item, dict):
+            raise DeploymentError("Deployment file 条目无效")
+        logical = str(item.get("logicalPath") or "")
+        _safe_logical(logical)
+        if logical in seen_logical:
+            raise DeploymentError(f"Deployment 逻辑路径重复：{logical}")
+        seen_logical.add(logical)
+        partitions.add(Path(logical).parts[1])
+        if payload_root is not None:
+            payload = payload_root / str(item.get("payloadPath") or "")
+            if not payload.is_file():
+                raise DeploymentError(f"Deployment payload 文件缺失：{payload}")
+            if _sha256(payload) != item.get("sha256"):
+                raise DeploymentError(f"Deployment payload 摘要不一致：{payload}")
+
+    seen_dynamic: set[str] = set()
+    for item in dynamic:
+        if not isinstance(item, dict) or item.get("readOnly") is not True:
+            raise DeploymentError("Dynamic mount 条目无效")
+        target = str(item.get("targetPath") or "")
+        _safe_logical(target, dynamic=True)
+        if target in seen_dynamic:
+            raise DeploymentError(f"Dynamic mount 目标重复：{target}")
+        seen_dynamic.add(target)
+        if payload_root is not None:
+            source = payload_root / str(item.get("sourcePayloadPath") or "")
+            if not source.is_file() or _sha256(source) != item.get("sha256"):
+                raise DeploymentError(f"Dynamic mount 源文件缺失或摘要变化：{target}")
+
+    expected_summary = {
+        "fileCount": len(files),
+        "fontFileCount": sum(item.get("kind") != "xml" for item in files),
+        "xmlFileCount": sum(item.get("kind") == "xml" for item in files),
+        "dynamicMountCount": len(dynamic),
+        "partitionCount": len(partitions),
+        "backendCount": len(BACKEND_PROFILES),
+        "activationReady": True,
+        "executableNow": False,
+    }
+    if summary != expected_summary:
+        raise DeploymentError("Deployment summary 与 payload 不一致")
+
+    expected_digest = _payload_digest(files, dynamic)
+    if deployment.get("payloadDigest") != expected_digest:
+        raise DeploymentError("Deployment payloadDigest 完整性校验失败")
+    semantic = {
+        "fontPlanId": deployment.get("fontPlanId"),
+        "routeId": deployment.get("routeId"),
+        "artifactManifestId": deployment.get("artifactManifestId"),
+        "payloadDigest": deployment.get("payloadDigest"),
+        "files": files,
+        "dynamicMounts": dynamic,
+        "backendProfiles": BACKEND_PROFILES,
+    }
+    expected_id = f"sha256:{_canonical_hash(semantic)}"
+    if deployment.get("deploymentId") != expected_id:
+        raise DeploymentError("Deployment deploymentId 完整性校验失败")
+
+    runtime_manifest = deployment.get("runtimeManifest")
+    if runtime_manifest is not None:
+        if not isinstance(runtime_manifest, dict):
+            raise DeploymentError("Deployment runtimeManifest 无效")
+        if runtime_manifest.get("deploymentId") != deployment.get("deploymentId"):
+            raise DeploymentError("Deployment runtimeManifest 与 deploymentId 不一致")
+        if payload_root is not None:
+            runtime_path = payload_root / str(runtime_manifest.get("payloadPath") or "")
+            if not runtime_path.is_file():
+                raise DeploymentError("Deployment runtime manifest 文件缺失")
+
+
+def validate_deployment(
+    deployment: dict[str, Any],
+    font_plan: dict[str, Any],
+    route_plan: dict[str, Any],
+    artifact_manifest: dict[str, Any],
+    payload_root: Path | None = None,
+) -> None:
+    validate_payload_integrity(deployment, payload_root)
     if deployment.get("fontPlanId") != font_plan.get("planId"):
         raise DeploymentError("Deployment 与 FontPlan 不一致")
     if deployment.get("routeId") != route_plan.get("routeId"):
@@ -509,15 +596,30 @@ def validate_deployment(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--font-plan", required=True, type=Path)
-    parser.add_argument("--route-plan", required=True, type=Path)
-    parser.add_argument("--artifact-manifest", required=True, type=Path)
+    parser.add_argument("--font-plan", type=Path)
+    parser.add_argument("--route-plan", type=Path)
+    parser.add_argument("--artifact-manifest", type=Path)
     parser.add_argument("--payload-root", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--validate", type=Path)
+    parser.add_argument("--validate-payload-only", type=Path)
     args = parser.parse_args()
 
     try:
+        if args.validate_payload_only is not None:
+            deployment = _load(args.validate_payload_only)
+            validate_payload_integrity(deployment, args.payload_root)
+            print(json.dumps({
+                "status": "ok",
+                "schema": deployment["schema"],
+                "deploymentId": deployment["deploymentId"],
+                "payloadDigest": deployment["payloadDigest"],
+                **deployment["summary"],
+            }, ensure_ascii=False, separators=(",", ":")))
+            return 0
+
+        if args.font_plan is None or args.route_plan is None or args.artifact_manifest is None:
+            raise DeploymentError("缺少 --font-plan / --route-plan / --artifact-manifest")
         font_plan = _load(args.font_plan)
         route_plan = _load(args.route_plan)
         artifacts = _load(args.artifact_manifest)

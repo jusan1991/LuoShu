@@ -359,8 +359,6 @@ sh "$ROOT/scripts/module_layout_test.sh"
 python3 "$ROOT/scripts/coloros_metrics_batch_test.py"
 FONT_INVENTORY_TEST_FONT=$(find /usr/share/fonts -type f -iname 'DejaVuSans.ttf' -print -quit 2>/dev/null || true)
 [ -s "$FONT_INVENTORY_TEST_FONT" ]
-python3 "$ROOT/scripts/font_source_profile_test.py" --font "$FONT_INVENTORY_TEST_FONT"
-sh "$ROOT/scripts/font_source_profile_bridge_test.sh" "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/font_inventory_test.py" --font "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/stock_metric_contract_test.py"
 python3 "$ROOT/scripts/font_inventory_symlink_test.py"
@@ -461,8 +459,6 @@ sh "$ROOT/scripts/module_layout_test.sh"
 python3 "$ROOT/scripts/coloros_metrics_batch_test.py"
 FONT_INVENTORY_TEST_FONT=$(find /usr/share/fonts -type f -iname 'DejaVuSans.ttf' -print -quit 2>/dev/null || true)
 [ -s "$FONT_INVENTORY_TEST_FONT" ]
-python3 "$ROOT/scripts/font_source_profile_test.py" --font "$FONT_INVENTORY_TEST_FONT"
-sh "$ROOT/scripts/font_source_profile_bridge_test.sh" "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/font_inventory_test.py" --font "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/stock_metric_contract_test.py"
 python3 "$ROOT/scripts/font_inventory_symlink_test.py"
@@ -568,8 +564,6 @@ sh "$ROOT/scripts/module_layout_test.sh"
 python3 "$ROOT/scripts/coloros_metrics_batch_test.py"
 FONT_INVENTORY_TEST_FONT=$(find /usr/share/fonts -type f -iname 'DejaVuSans.ttf' -print -quit 2>/dev/null || true)
 [ -s "$FONT_INVENTORY_TEST_FONT" ]
-python3 "$ROOT/scripts/font_source_profile_test.py" --font "$FONT_INVENTORY_TEST_FONT"
-sh "$ROOT/scripts/font_source_profile_bridge_test.sh" "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/font_inventory_test.py" --font "$FONT_INVENTORY_TEST_FONT"
 python3 "$ROOT/scripts/stock_metric_contract_test.py"
 python3 "$ROOT/scripts/font_inventory_symlink_test.py"

@@ -145,7 +145,7 @@ Shadow 动作：
 - Phase 4 只能消费 Source Profile，不得重新散读多个旧探测器
 
 ### Phase 4 — Universal Replacement Planner
-状态：**进行中 / universal-font-plan-v1**
+状态：**已完成 / PR #257 / universal-font-plan-v1**
 
 输入：Phase 1 拓扑 + Phase 2 角色 + Phase 3 源字体能力。
 

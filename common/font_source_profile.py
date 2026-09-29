@@ -216,11 +216,12 @@ def _instances(font: TTFont) -> list[dict[str, Any]]:
             str(tag): float(value)
             for tag, value in sorted(instance.coordinates.items())
         }
+        ps_name_id = _int(getattr(instance, "postscriptNameID", None), 0xFFFF)
         result.append({
             "name": _debug_name(font, int(instance.subfamilyNameID), "Instance"),
             "postScriptName": (
-                _debug_name(font, int(instance.postscriptNameID), "")
-                if int(getattr(instance, "postscriptNameID", 0xFFFF)) != 0xFFFF
+                _debug_name(font, int(ps_name_id), "")
+                if ps_name_id is not None and ps_name_id != 0xFFFF
                 else ""
             ),
             "coordinates": coordinates,

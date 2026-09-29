@@ -48,10 +48,20 @@ jobs:
           sh -n service.sh
           sh -n scripts/universal_font_deployment_bridge_test.sh
           sh -n scripts/universal_mount_runtime_test.sh
+          test -f scripts/universal_font_deployment_bridge_test.sh
+          test -f scripts/universal_mount_runtime_test.sh
           python3 scripts/universal_font_compiler_test.py
+          test -f scripts/universal_font_deployment_bridge_test.sh
+          test -f scripts/universal_mount_runtime_test.sh
           python3 scripts/universal_font_deployment_test.py
-          sh scripts/universal_font_deployment_bridge_test.sh
-          sh scripts/universal_mount_runtime_test.sh
+          if [ ! -f scripts/universal_font_deployment_bridge_test.sh ] || [ ! -f scripts/universal_mount_runtime_test.sh ]; then
+            pwd
+            ls -la scripts | tail -n 80
+            git status --short
+            exit 1
+          fi
+          sh "$GITHUB_WORKSPACE/scripts/universal_font_deployment_bridge_test.sh"
+          sh "$GITHUB_WORKSPACE/scripts/universal_mount_runtime_test.sh"
           grep -qx 'common/universal_font_deployment.py' scripts/module_payload_manifest.txt
           grep -qx 'common/universal_font_deployment.sh' scripts/module_payload_manifest.txt
           grep -qx 'common/universal_next_boot.sh' scripts/module_payload_manifest.txt

@@ -104,6 +104,18 @@ def _roles_digest(roles: dict[str, Any]) -> str:
     return f"sha256:{_canonical_hash(material)}"
 
 
+def _source_digest(profile: dict[str, Any]) -> str:
+    material = {
+        "schema": profile.get("schema"),
+        "profileRevision": profile.get("profileRevision"),
+        "profileId": profile.get("profileId"),
+        "summary": profile.get("summary"),
+        "families": profile.get("families"),
+        "files": profile.get("files"),
+    }
+    return f"sha256:{_canonical_hash(material)}"
+
+
 def _topology_slots(topology: dict[str, Any]) -> dict[str, dict[str, Any]]:
     raw = topology.get("slots")
     if not isinstance(raw, dict):
@@ -617,6 +629,7 @@ def build_plan(
         "rolesDigest": _roles_digest(roles),
         "sourceProfileId": profile_id,
         "sourceProfileRevision": profile.get("profileRevision"),
+        "sourceDigest": _source_digest(profile),
     }
     semantic = {
         "inputs": inputs,
@@ -665,6 +678,8 @@ def build_plan(
         expected_profile_id=profile_id,
         expected_topology_digest=inputs["topologyDigest"],
         expected_roles_digest=inputs["rolesDigest"],
+        expected_source_digest=inputs["sourceDigest"],
+        expected_source_revision=_int(profile.get("profileRevision")),
     )
     return plan
 
@@ -675,6 +690,8 @@ def validate_plan(
     expected_profile_id: str | None = None,
     expected_topology_digest: str | None = None,
     expected_roles_digest: str | None = None,
+    expected_source_digest: str | None = None,
+    expected_source_revision: int | None = None,
 ) -> None:
     if plan.get("schema") != SCHEMA or plan.get("state") != "planned":
         raise UniversalPlanError("Universal FontPlan 格式无效")
@@ -696,6 +713,10 @@ def validate_plan(
         raise UniversalPlanError("Universal FontPlan 与设备拓扑摘要不一致")
     if expected_roles_digest and inputs.get("rolesDigest") != expected_roles_digest:
         raise UniversalPlanError("Universal FontPlan 与角色摘要不一致")
+    if expected_source_digest and inputs.get("sourceDigest") != expected_source_digest:
+        raise UniversalPlanError("Universal FontPlan 与源字体摘要不一致")
+    if expected_source_revision is not None and _int(inputs.get("sourceProfileRevision")) != expected_source_revision:
+        raise UniversalPlanError("Universal FontPlan 与源字体 Profile revision 不一致")
     targets = plan.get("targets")
     if not isinstance(targets, dict):
         raise UniversalPlanError("Universal FontPlan 缺少 targets")
@@ -751,6 +772,8 @@ def main() -> int:
                 profile_id,
                 _topology_digest(topology),
                 _roles_digest(roles),
+                _source_digest(profile),
+                _int(profile.get("profileRevision")),
             )
         else:
             plan = build_plan(topology, roles, profile)

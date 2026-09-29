@@ -147,7 +147,7 @@ def main() -> int:
         assert fallback_refs[0]["familyAttributes"]["variant"] == "compact"
         assert fallback_refs[0]["resolvedPath"] == "/product/fonts/ProductUi-Regular.ttf"
         assert payload["xmlGraph"]["aliases"] == [{
-            "sourceXml": str(etc_dirs["system"] / "fonts.xml"),
+            "sourceXml": "/system/etc/fonts.xml",
             "name": "sans",
             "to": "sans-serif",
         }]

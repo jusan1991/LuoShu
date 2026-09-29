@@ -568,16 +568,18 @@ def build_route_plan(
             continue
 
         all_refs = target.get("xmlRefs")
-        if isinstance(all_refs, list) and any(
+        has_dynamic_ref = isinstance(all_refs, list) and any(
             isinstance(ref, dict)
             and str(ref.get("sourceXml") or "").startswith(DYNAMIC_PREFIX)
             for ref in all_refs
-        ):
+        )
+        if has_dynamic_ref:
             deferred_dynamic.append(target_path)
 
         refs = _target_route_refs(target)
         if not refs:
-            physical_only.append(target_path)
+            if not has_dynamic_ref:
+                physical_only.append(target_path)
             continue
 
         for ref in refs:

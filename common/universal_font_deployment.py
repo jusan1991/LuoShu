@@ -1,0 +1,566 @@
+#!/usr/bin/env python3
+"""Build a backend-neutral LuoShu Phase 7 deployment payload.
+
+Consumes validated Phase 4/5/6 artifacts. It never reclassifies fonts and never
+chooses new targets. The exact same payload is consumed by Magisk, KernelSU and
+APatch; only boot hook timing differs.
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+import minimal_xml_router
+import universal_font_compiler
+import universal_font_plan
+
+SCHEMA = "universal-font-deployment-v1"
+DEPLOYMENT_REVISION = 1
+ALLOWED_PARTITIONS = {
+    "system", "system_ext", "product", "vendor", "odm", "oem",
+    "my_product", "my_engineering", "my_company", "my_preload",
+    "my_region", "my_stock", "oplus_product", "oplus_engineering",
+    "oplus_version", "oplus_region", "mi_ext", "cust", "hw_product",
+}
+BACKEND_PROFILES = {
+    "Magisk": {"mountStage": "post-fs-data", "backend": "self-mount"},
+    "KernelSU": {"mountStage": "post-mount", "backend": "self-mount"},
+    "APatch": {"mountStage": "post-mount", "backend": "self-mount"},
+}
+
+
+class DeploymentError(RuntimeError):
+    pass
+
+
+def _load(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise DeploymentError(f"无法读取 JSON：{path}") from error
+    if not isinstance(value, dict):
+        raise DeploymentError(f"JSON 根节点无效：{path}")
+    return value
+
+
+def _canonical_hash(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as error:
+        raise DeploymentError(f"无法读取文件：{path}") from error
+    return digest.hexdigest()
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    try:
+        temp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _safe_logical(path_value: str, *, dynamic: bool = False) -> Path:
+    path = Path(path_value)
+    parts = path.parts
+    if not parts or parts[0] != "/":
+        raise DeploymentError(f"逻辑路径必须是绝对路径：{path_value}")
+    if any(part in {"", ".", ".."} for part in parts[1:]):
+        raise DeploymentError(f"逻辑路径包含非法组件：{path_value}")
+    if dynamic:
+        if len(parts) < 4 or parts[1] != "data" or parts[2] != "fonts":
+            raise DeploymentError(f"动态字体目标不在 /data/fonts：{path_value}")
+        return path
+    if len(parts) < 3 or parts[1] not in ALLOWED_PARTITIONS:
+        raise DeploymentError(f"不支持的系统字体分区：{path_value}")
+    return path
+
+
+def _payload_relative(logical: Path) -> Path:
+    return Path(*logical.parts[1:])
+
+
+def _copy_verified(source: Path, expected_sha: str, destination: Path) -> dict[str, Any]:
+    if not source.is_file():
+        raise DeploymentError(f"编译 artifact 不存在：{source}")
+    actual = _sha256(source)
+    if actual != expected_sha:
+        raise DeploymentError(f"编译 artifact 摘要变化：{source.name}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    os.chmod(destination, 0o644)
+    copied = _sha256(destination)
+    if copied != expected_sha:
+        raise DeploymentError(f"部署副本摘要不一致：{destination}")
+    return {
+        "sha256": copied,
+        "bytes": int(destination.stat().st_size),
+    }
+
+
+def _artifact_index(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise DeploymentError("Artifact manifest 缺少 artifacts")
+    for item in artifacts:
+        if not isinstance(item, dict) or item.get("status") != "ready":
+            continue
+        artifact_id = str(item.get("artifactId") or "")
+        path = Path(str(item.get("output") or ""))
+        sha = str(item.get("sha256") or "")
+        if not artifact_id.startswith("ufc:") or not path.is_file() or len(sha) != 64:
+            raise DeploymentError(f"Ready artifact 无效：{artifact_id}")
+        result[artifact_id] = item
+    return result
+
+
+def _record_file(
+    records: dict[str, dict[str, Any]],
+    logical: str,
+    payload_rel: str,
+    *,
+    kind: str,
+    sha256: str,
+    bytes_count: int,
+    artifact_id: str = "",
+    source_xml: str = "",
+) -> None:
+    prior = records.get(logical)
+    value = {
+        "kind": kind,
+        "logicalPath": logical,
+        "payloadPath": payload_rel,
+        "sha256": sha256,
+        "bytes": int(bytes_count),
+        "artifactId": artifact_id,
+        "sourceXml": source_xml,
+    }
+    if prior is not None and prior != value:
+        raise DeploymentError(f"多个部署对象争用同一逻辑路径：{logical}")
+    records[logical] = value
+
+
+def _artifact_destination_for_xml(target_path: str, filename: str) -> Path:
+    target = _safe_logical(target_path)
+    parent = target.parent
+    if parent.name != "fonts":
+        raise DeploymentError(f"XML 路由目标不在字体目录：{target_path}")
+    return parent / filename
+
+
+def _write_dynamic_runtime(stage: Path, mounts: list[dict[str, Any]]) -> None:
+    runtime = stage / ".luoshu-runtime/deployment"
+    runtime.mkdir(parents=True, exist_ok=True)
+    conf = runtime / "dynamic-mounts.conf"
+    with conf.open("w", encoding="utf-8") as stream:
+        for item in mounts:
+            stream.write(
+                f"{item['sourcePayloadPath']}|{item['targetPath']}|{item['sha256']}\n"
+            )
+    os.chmod(conf, 0o600)
+
+
+def _payload_digest(files: list[dict[str, Any]], dynamics: list[dict[str, Any]]) -> str:
+    material = {
+        "files": [
+            {
+                "kind": item["kind"],
+                "logicalPath": item["logicalPath"],
+                "payloadPath": item["payloadPath"],
+                "sha256": item["sha256"],
+                "bytes": item["bytes"],
+                "artifactId": item.get("artifactId", ""),
+                "sourceXml": item.get("sourceXml", ""),
+            }
+            for item in sorted(files, key=lambda value: value["logicalPath"])
+        ],
+        "dynamicMounts": [
+            {
+                "targetPath": item["targetPath"],
+                "sourcePayloadPath": item["sourcePayloadPath"],
+                "sha256": item["sha256"],
+                "artifactId": item["artifactId"],
+            }
+            for item in sorted(dynamics, key=lambda value: value["targetPath"])
+        ],
+    }
+    return f"sha256:{_canonical_hash(material)}"
+
+
+def build_deployment(
+    font_plan: dict[str, Any],
+    route_plan: dict[str, Any],
+    artifact_manifest: dict[str, Any],
+    output_root: Path,
+) -> dict[str, Any]:
+    universal_font_plan.validate_plan(font_plan)
+    minimal_xml_router.validate_route_plan(route_plan, font_plan=font_plan)
+    universal_font_compiler.validate_manifest(artifact_manifest, font_plan, route_plan)
+
+    summary = artifact_manifest.get("summary") if isinstance(artifact_manifest.get("summary"), dict) else {}
+    if int(summary.get("blockedCount") or 0) != 0:
+        raise DeploymentError("存在 blocked artifact，拒绝生成部署 payload")
+    if route_plan.get("summary", {}).get("routingComplete") is not True:
+        raise DeploymentError("XML RoutePlan 不完整，拒绝生成部署 payload")
+
+    artifacts = _artifact_index(artifact_manifest)
+    artifact_map = artifact_manifest.get("artifactMap")
+    physical_map = artifact_manifest.get("physicalTargetMap")
+    dynamic_map = artifact_manifest.get("dynamicTargetMap")
+    if not isinstance(artifact_map, dict) or not isinstance(physical_map, dict) or not isinstance(dynamic_map, dict):
+        raise DeploymentError("Artifact manifest 缺少部署映射")
+
+    parent = output_root.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=parent))
+    files: dict[str, dict[str, Any]] = {}
+    dynamic_mounts: list[dict[str, Any]] = []
+    dynamic_targets: set[str] = set()
+
+    try:
+        # Render Phase 5 XML first. The renderer checks source XML digests and
+        # proves that only planned font.text nodes change.
+        minimal_xml_router.render_all(
+            route_plan,
+            {str(k): str(v) for k, v in artifact_map.items()},
+            stage,
+        )
+
+        documents = route_plan.get("documents") if isinstance(route_plan.get("documents"), dict) else {}
+        for source_xml, document in documents.items():
+            if not isinstance(document, dict) or not document.get("operations"):
+                continue
+            logical_xml = _safe_logical(str(source_xml))
+            rendered = stage / _payload_relative(logical_xml)
+            if not rendered.is_file():
+                raise DeploymentError(f"渲染后的 XML 缺失：{source_xml}")
+            _record_file(
+                files,
+                str(logical_xml),
+                str(_payload_relative(logical_xml)),
+                kind="xml",
+                sha256=_sha256(rendered),
+                bytes_count=int(rendered.stat().st_size),
+                source_xml=str(source_xml),
+            )
+            for operation in document.get("operations") or []:
+                artifact = operation.get("artifact") if isinstance(operation, dict) else None
+                if not isinstance(artifact, dict):
+                    continue
+                artifact_id = str(artifact.get("artifactId") or "")
+                compiled = artifacts.get(artifact_id)
+                if compiled is None:
+                    raise DeploymentError(f"XML Route 缺少 ready artifact：{artifact_id}")
+                filename = str(artifact_map.get(artifact_id) or "")
+                if not filename or Path(filename).name != filename:
+                    raise DeploymentError(f"XML artifact 文件名无效：{artifact_id}")
+                logical_font = _artifact_destination_for_xml(
+                    str(operation.get("targetPath") or ""),
+                    filename,
+                )
+                rel = _payload_relative(logical_font)
+                destination = stage / rel
+                details = _copy_verified(
+                    Path(str(compiled["output"])),
+                    str(compiled["sha256"]),
+                    destination,
+                )
+                _record_file(
+                    files,
+                    str(logical_font),
+                    str(rel),
+                    kind="xml-font",
+                    sha256=details["sha256"],
+                    bytes_count=details["bytes"],
+                    artifact_id=artifact_id,
+                    source_xml=str(source_xml),
+                )
+
+        # Physical-only targets keep the exact ROM logical path.
+        for logical_value, artifact_id_raw in sorted(physical_map.items()):
+            logical = _safe_logical(str(logical_value))
+            artifact_id = str(artifact_id_raw)
+            compiled = artifacts.get(artifact_id)
+            if compiled is None:
+                raise DeploymentError(f"Physical target 缺少 ready artifact：{artifact_id}")
+            rel = _payload_relative(logical)
+            details = _copy_verified(
+                Path(str(compiled["output"])),
+                str(compiled["sha256"]),
+                stage / rel,
+            )
+            _record_file(
+                files,
+                str(logical),
+                str(rel),
+                kind="physical-font",
+                sha256=details["sha256"],
+                bytes_count=details["bytes"],
+                artifact_id=artifact_id,
+            )
+
+        # Dynamic targets are not placed in the partition overlay. They are kept
+        # in a private source directory and read-only bind-mounted to /data/fonts.
+        dynamic_source_root = stage / ".luoshu-dynamic"
+        for target_value, artifact_id_raw in sorted(dynamic_map.items()):
+            target = _safe_logical(str(target_value), dynamic=True)
+            target_text = str(target)
+            if target_text in dynamic_targets:
+                raise DeploymentError(f"重复动态字体目标：{target_text}")
+            dynamic_targets.add(target_text)
+            artifact_id = str(artifact_id_raw)
+            compiled = artifacts.get(artifact_id)
+            if compiled is None:
+                raise DeploymentError(f"Dynamic target 缺少 ready artifact：{artifact_id}")
+            suffix = Path(str(compiled.get("output") or "")).suffix.lower()
+            safe_id = artifact_id.replace(":", "-")
+            source_rel = Path(".luoshu-dynamic") / f"{safe_id}{suffix}"
+            details = _copy_verified(
+                Path(str(compiled["output"])),
+                str(compiled["sha256"]),
+                stage / source_rel,
+            )
+            dynamic_mounts.append({
+                "targetPath": target_text,
+                "sourcePayloadPath": str(source_rel),
+                "sha256": details["sha256"],
+                "bytes": details["bytes"],
+                "artifactId": artifact_id,
+                "readOnly": True,
+            })
+
+        _write_dynamic_runtime(stage, dynamic_mounts)
+
+        file_list = sorted(files.values(), key=lambda value: value["logicalPath"])
+        payload_digest = _payload_digest(file_list, dynamic_mounts)
+        partitions = sorted({
+            Path(item["logicalPath"]).parts[1]
+            for item in file_list
+            if item["logicalPath"].startswith("/")
+        })
+        deployment_semantic = {
+            "fontPlanId": font_plan.get("planId"),
+            "routeId": route_plan.get("routeId"),
+            "artifactManifestId": artifact_manifest.get("manifestId"),
+            "payloadDigest": payload_digest,
+            "files": file_list,
+            "dynamicMounts": dynamic_mounts,
+            "backendProfiles": BACKEND_PROFILES,
+        }
+        deployment_id = f"sha256:{_canonical_hash(deployment_semantic)}"
+        payload = {
+            "schema": SCHEMA,
+            "deploymentRevision": DEPLOYMENT_REVISION,
+            "state": "prepared",
+            "generatedAt": int(time.time()),
+            "mutatesSystem": False,
+            "mountsAtBoot": True,
+            "backendNeutral": True,
+            "deploymentId": deployment_id,
+            "fontPlanId": font_plan.get("planId"),
+            "routeId": route_plan.get("routeId"),
+            "artifactManifestId": artifact_manifest.get("manifestId"),
+            "payloadDigest": payload_digest,
+            "summary": {
+                "fileCount": len(file_list),
+                "fontFileCount": sum(item["kind"] != "xml" for item in file_list),
+                "xmlFileCount": sum(item["kind"] == "xml" for item in file_list),
+                "dynamicMountCount": len(dynamic_mounts),
+                "partitionCount": len(partitions),
+                "backendCount": len(BACKEND_PROFILES),
+                "activationReady": True,
+                "executableNow": False,
+            },
+            "partitions": partitions,
+            "backendProfiles": copy.deepcopy(BACKEND_PROFILES),
+            "files": file_list,
+            "dynamicMounts": dynamic_mounts,
+        }
+
+        runtime_manifest = stage / ".luoshu-runtime/deployment/deployment.json"
+        _atomic_json(runtime_manifest, payload)
+        runtime_manifest_hash = _sha256(runtime_manifest)
+        payload["runtimeManifest"] = {
+            "payloadPath": ".luoshu-runtime/deployment/deployment.json",
+            "sha256": runtime_manifest_hash,
+        }
+
+        # Rewrite once with the final runtimeManifest descriptor. It is excluded
+        # from deploymentId/payloadDigest because it contains the manifest itself.
+        _atomic_json(runtime_manifest, payload)
+
+        if output_root.exists():
+            shutil.rmtree(output_root)
+        os.replace(stage, output_root)
+        stage = Path()
+        return payload
+    finally:
+        if stage and stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+
+
+def validate_deployment(
+    deployment: dict[str, Any],
+    font_plan: dict[str, Any],
+    route_plan: dict[str, Any],
+    artifact_manifest: dict[str, Any],
+    payload_root: Path | None = None,
+) -> None:
+    if deployment.get("schema") != SCHEMA:
+        raise DeploymentError("Deployment manifest schema 无效")
+    if int(deployment.get("deploymentRevision") or 0) != DEPLOYMENT_REVISION:
+        raise DeploymentError("Deployment revision 无效")
+    if deployment.get("mutatesSystem") is not False or deployment.get("backendNeutral") is not True:
+        raise DeploymentError("Deployment manifest 安全属性无效")
+    if deployment.get("fontPlanId") != font_plan.get("planId"):
+        raise DeploymentError("Deployment 与 FontPlan 不一致")
+    if deployment.get("routeId") != route_plan.get("routeId"):
+        raise DeploymentError("Deployment 与 RoutePlan 不一致")
+    if deployment.get("artifactManifestId") != artifact_manifest.get("manifestId"):
+        raise DeploymentError("Deployment 与 Artifact manifest 不一致")
+    if deployment.get("backendProfiles") != BACKEND_PROFILES:
+        raise DeploymentError("Deployment backend profiles 已被修改")
+
+    files = deployment.get("files")
+    dynamic = deployment.get("dynamicMounts")
+    summary = deployment.get("summary")
+    if not isinstance(files, list) or not isinstance(dynamic, list) or not isinstance(summary, dict):
+        raise DeploymentError("Deployment manifest 结构无效")
+
+    seen_logical: set[str] = set()
+    partitions: set[str] = set()
+    for item in files:
+        if not isinstance(item, dict):
+            raise DeploymentError("Deployment file 条目无效")
+        logical = str(item.get("logicalPath") or "")
+        _safe_logical(logical)
+        if logical in seen_logical:
+            raise DeploymentError(f"Deployment 逻辑路径重复：{logical}")
+        seen_logical.add(logical)
+        partitions.add(Path(logical).parts[1])
+        if payload_root is not None:
+            payload = payload_root / str(item.get("payloadPath") or "")
+            if not payload.is_file():
+                raise DeploymentError(f"Deployment payload 文件缺失：{payload}")
+            if _sha256(payload) != item.get("sha256"):
+                raise DeploymentError(f"Deployment payload 摘要不一致：{payload}")
+
+    seen_dynamic: set[str] = set()
+    for item in dynamic:
+        if not isinstance(item, dict) or item.get("readOnly") is not True:
+            raise DeploymentError("Dynamic mount 条目无效")
+        target = str(item.get("targetPath") or "")
+        _safe_logical(target, dynamic=True)
+        if target in seen_dynamic:
+            raise DeploymentError(f"Dynamic mount 目标重复：{target}")
+        seen_dynamic.add(target)
+        if payload_root is not None:
+            source = payload_root / str(item.get("sourcePayloadPath") or "")
+            if not source.is_file() or _sha256(source) != item.get("sha256"):
+                raise DeploymentError(f"Dynamic mount 源文件缺失或摘要变化：{target}")
+
+    expected_summary = {
+        "fileCount": len(files),
+        "fontFileCount": sum(item.get("kind") != "xml" for item in files),
+        "xmlFileCount": sum(item.get("kind") == "xml" for item in files),
+        "dynamicMountCount": len(dynamic),
+        "partitionCount": len(partitions),
+        "backendCount": len(BACKEND_PROFILES),
+        "activationReady": True,
+        "executableNow": False,
+    }
+    if summary != expected_summary:
+        raise DeploymentError("Deployment summary 与 payload 不一致")
+
+    expected_digest = _payload_digest(files, dynamic)
+    if deployment.get("payloadDigest") != expected_digest:
+        raise DeploymentError("Deployment payloadDigest 完整性校验失败")
+    semantic = {
+        "fontPlanId": deployment.get("fontPlanId"),
+        "routeId": deployment.get("routeId"),
+        "artifactManifestId": deployment.get("artifactManifestId"),
+        "payloadDigest": deployment.get("payloadDigest"),
+        "files": files,
+        "dynamicMounts": dynamic,
+        "backendProfiles": BACKEND_PROFILES,
+    }
+    expected_id = f"sha256:{_canonical_hash(semantic)}"
+    if deployment.get("deploymentId") != expected_id:
+        raise DeploymentError("Deployment deploymentId 完整性校验失败")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--font-plan", required=True, type=Path)
+    parser.add_argument("--route-plan", required=True, type=Path)
+    parser.add_argument("--artifact-manifest", required=True, type=Path)
+    parser.add_argument("--payload-root", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--validate", type=Path)
+    args = parser.parse_args()
+
+    try:
+        font_plan = _load(args.font_plan)
+        route_plan = _load(args.route_plan)
+        artifacts = _load(args.artifact_manifest)
+        universal_font_plan.validate_plan(font_plan)
+        minimal_xml_router.validate_route_plan(route_plan, font_plan=font_plan)
+        universal_font_compiler.validate_manifest(artifacts, font_plan, route_plan)
+
+        if args.validate is not None:
+            deployment = _load(args.validate)
+            validate_deployment(
+                deployment, font_plan, route_plan, artifacts, args.payload_root
+            )
+        else:
+            if args.payload_root is None or args.manifest is None:
+                raise DeploymentError("生成部署 payload 需要 --payload-root 与 --manifest")
+            deployment = build_deployment(
+                font_plan, route_plan, artifacts, args.payload_root
+            )
+            validate_deployment(
+                deployment, font_plan, route_plan, artifacts, args.payload_root
+            )
+            _atomic_json(args.manifest, deployment)
+
+        print(json.dumps({
+            "status": "ok",
+            "schema": deployment["schema"],
+            "deploymentId": deployment["deploymentId"],
+            "payloadDigest": deployment["payloadDigest"],
+            **deployment["summary"],
+        }, ensure_ascii=False, separators=(",", ":")))
+        return 0
+    except Exception as error:
+        print(json.dumps({
+            "status": "error",
+            "message": str(error) or error.__class__.__name__,
+        }, ensure_ascii=False, separators=(",", ":")))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

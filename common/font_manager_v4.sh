@@ -704,7 +704,8 @@ delete_font_json() {
     done
     if [ "$_deleted" -gt 0 ]; then
         invalidate_font_index_cache
-        rm -rf "$CONFIG_DIR/source-font-profiles" 2>/dev/null || true\n        rm -rf "$CONFIG_DIR/universal-font-plans" 2>/dev/null || true
+        rm -rf "$CONFIG_DIR/source-font-profiles" 2>/dev/null || true
+        rm -rf "$CONFIG_DIR/universal-font-plans" 2>/dev/null || true
         printf '{"status":"ok","data":{"deleted":%s,"message":"已删除 %s 个文件"}}\n' "$_deleted" "$_deleted"
     else
         printf '{"status":"error","message":"未找到字体文件"}\n'

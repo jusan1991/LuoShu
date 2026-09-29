@@ -257,17 +257,29 @@ Shadow 动作：
 - 当前迁移阶段正式换字体按钮仍不自动 stage-next；只有显式内部 stage-next 才进入新 runtime
 
 ### Phase 8 — Runtime Verification
-状态：未开始
+状态：**进行中 / universal-font-runtime-verification-v1**
 
 重启后自动验证：
 
 - family 是否加载
-- 物理槽是否挂载
+- 物理槽是否真实暴露 Phase 7 的同一份 payload 哈希
 - CJK / Latin / digits 是否覆盖
-- 多字重 / variable axis
-- /data/fonts 是否反向覆盖
+- 多字重 / variable axis 是否满足冻结 contract
+- /data/fonts 是否仍为只读 bind，且未被运行时层反向覆盖
 - 目标 FontManager 是否真实命中新字体
-- 是否发生 baseline / bounding box 高风险
+- Phase 6 baseline / bounding box 几何校验是否仍与运行时可见文件身份一致
+
+标准产物：
+
+- `config/universal-font-runtime-verification.json`
+- `config/universal-font-runtime-verification.conf`
+- Schema：`universal-font-runtime-verification-v1`
+- 只消费 Phase 4 FontPlan、Phase 6 Artifact Manifest、Phase 7 Deployment 与当前 boot runtime evidence，不允许重新扫描或重新选择目标槽位
+- `PASS`：payload 身份、可见哈希、动态挂载、脚本覆盖、字重/轴和编译几何证据均成立
+- `WARN`：systemless payload 已被强证据确认，但 FontManager dump 被 OEM 隐藏/裁剪等软证据不足
+- `FAIL`：部署身份、文件哈希、动态挂载、脚本覆盖、字重/轴或几何 contract 任一关键条件失败
+- 只有 `PASS` 才释放 Phase 7 保留的 retired payload；`WARN/FAIL` 必须继续保留回滚材料
+- 验证器是一次性 boot-scoped 任务，禁止常驻 watcher 和无限重试
 
 最终给用户 PASS / WARN / FAIL，而不是让用户盲测。
 

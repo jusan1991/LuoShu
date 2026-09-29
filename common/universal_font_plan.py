@@ -549,6 +549,8 @@ def _plan_slot(
         "runtimeEvidence": dict(slot.get("runtimeEvidence") or {}) if isinstance(slot.get("runtimeEvidence"), dict) else {},
         "legacyReplaceable": slot.get("legacyReplaceable") if isinstance(slot.get("legacyReplaceable"), bool) else None,
         "targetContract": {
+            "format": str(slot.get("format") or slot.get("validatedFormat") or ""),
+            "faceIndex": max(0, _int(slot.get("faceIndex"), 0) or 0),
             "weight": _target_weight(slot),
             "italic": _target_italic(slot),
             "variable": _target_variable(slot),

@@ -47,6 +47,16 @@ CJK_TOKENS = (
     "sourcehan-sans-sc", "sourcehan-sans-tc", "droidsansfallback",
 )
 LATIN_TOKENS = ("latin", "latn")
+CJK_LANG_PREFIXES = ("zh", "cmn", "yue", "wuu", "hak", "nan", "hans", "hant")
+LATIN_LANG_PREFIXES = (
+    "en", "fr", "de", "es", "it", "pt", "nl", "sv", "no", "da", "fi",
+    "pl", "cs", "sk", "sl", "hr", "hu", "ro", "tr", "vi", "id", "ms", "latn",
+)
+SPECIAL_LANG_PREFIXES = (
+    "ja", "ko", "ar", "fa", "ur", "he", "iw", "th", "lo", "km", "my",
+    "hi", "bn", "gu", "kn", "ml", "mr", "ne", "pa", "si", "ta", "te",
+    "bo", "ka", "hy", "am", "ethi", "deva", "arab", "hebr", "thai", "jpan", "kore",
+)
 SPECIAL_SCRIPT_TOKENS = (
     "arabic", "hebrew", "thai", "devanagari", "bengali", "tamil", "telugu",
     "malayalam", "gujarati", "gurmukhi", "kannada", "khmer", "lao",
@@ -104,6 +114,58 @@ def _families(slot: dict[str, Any]) -> list[str]:
         if text and text not in result:
             result.append(text)
     return result
+
+
+def _xml_refs(slot: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = slot.get("xmlRefs")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _xml_semantics(slot: dict[str, Any]) -> dict[str, list[str]]:
+    result = {"lang": [], "variant": [], "fallbackFor": []}
+    for ref in _xml_refs(slot):
+        attrs = ref.get("familyAttributes")
+        if not isinstance(attrs, dict):
+            continue
+        for raw_key, raw_value in attrs.items():
+            key = str(raw_key).strip().lower()
+            value = str(raw_value).strip()
+            if not value:
+                continue
+            if key in {"lang", "language", "locale"}:
+                bucket = result["lang"]
+            elif key in {"fallbackfor", "fallback-for"}:
+                bucket = result["fallbackFor"]
+            elif key == "variant":
+                bucket = result["variant"]
+            else:
+                continue
+            if value not in bucket:
+                bucket.append(value)
+    return result
+
+
+def _language_kind(values: list[str]) -> str:
+    tokens: list[str] = []
+    for value in values:
+        normalized = normalize(value)
+        for separator in (",", ";", ":"):
+            normalized = normalized.replace(separator, "-")
+        tokens.extend(item for item in normalized.split("-") if item)
+        if normalized:
+            tokens.append(normalized)
+    for token in tokens:
+        if token.startswith(SPECIAL_LANG_PREFIXES):
+            return "special"
+    for token in tokens:
+        if token.startswith(CJK_LANG_PREFIXES):
+            return "cjk"
+    for token in tokens:
+        if token.startswith(LATIN_LANG_PREFIXES):
+            return "latin"
+    return ""
 
 
 def _coverage(slot: dict[str, Any]) -> dict[str, Any]:
@@ -194,6 +256,8 @@ def _classification(
     families = _families(slot)
     text = _evidence_text(path, slot)
     coverage = _coverage(slot)
+    semantics = _xml_semantics(slot)
+    language_kind = _language_kind(semantics["lang"])
     has_han = _coverage_bool(coverage, "hasHan") or _coverage_count(coverage, "hanCount") > 0
     has_latin = _coverage_bool(coverage, "hasLatin") or _coverage_count(coverage, "latinCount") > 0
     has_digits = _coverage_bool(coverage, "hasDigits") or _coverage_count(coverage, "digitCount") > 0
@@ -202,6 +266,7 @@ def _classification(
     reasons: list[str] = []
     evidence: dict[str, Any] = {
         "families": families,
+        "xmlSemantics": semantics,
         "coverage": {
             "han": has_han,
             "latin": has_latin,
@@ -247,6 +312,24 @@ def _classification(
         role = "numeric"
         confidence = 90 if _contains_phrase(text, NUMERIC_TOKENS) else 75
         reasons.append("numeric-identity" if confidence >= 90 else "digits-only-coverage")
+    elif language_kind == "special":
+        role = "special-fallback"
+        confidence = 100
+        reasons.append("xml-language-special-fallback")
+    elif language_kind == "cjk":
+        role = "cjk"
+        confidence = 100 if has_han else 90
+        reasons.append("xml-language-cjk")
+        if has_han:
+            reasons.append("han-coverage")
+    elif language_kind == "latin":
+        role = "latin"
+        confidence = 100 if has_latin else 90
+        reasons.append("xml-language-latin")
+    elif semantics["fallbackFor"]:
+        role = "special-fallback"
+        confidence = 92
+        reasons.append("xml-fallbackfor-without-supported-script")
     elif _is_special_script(text):
         role = "special-fallback"
         confidence = 95

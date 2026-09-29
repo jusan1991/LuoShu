@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -117,6 +118,56 @@ def main() -> int:
         assert output_path.is_file()
         assert converted_json["sourceContainer"] == "WOFF"
         assert converted_json["outputFormat"] in {"TTF", "OTF"}
+
+        # Force the Android fallback path without depending on host Brotli.
+        # FontTools must reject this synthetic WOFF2, then the test decoder emits
+        # a known-good TTF beside the staged input, matching google/woff2 CLI semantics.
+        fake_woff2 = temp / "fake-native.woff2"
+        fake_woff2.write_bytes(b"wOF2" + b"\\x00" * 32)
+        fake_decoder = temp / "fake-woff2-decompress"
+        fake_decoder.write_text(
+            "#!/usr/bin/env python3\\n"
+            "import shutil, sys\\n"
+            "from pathlib import Path\\n"
+            "source = Path(sys.argv[1])\\n"
+            f"shutil.copyfile({str(regular)!r}, str(source.with_suffix('.ttf')))\\n",
+            encoding="utf-8",
+        )
+        fake_decoder.chmod(0o755)
+
+        native_dir = temp / "native-converted"
+        native_result = run([
+            sys.executable, str(converter),
+            "--input", str(fake_woff2),
+            "--output-dir", str(native_dir),
+            "--woff2-decoder", str(fake_decoder),
+        ])
+        assert native_result.returncode == 0, native_result.stderr or native_result.stdout
+        native_json = json.loads(native_result.stdout)
+        assert native_json["sourceContainer"] == "WOFF2"
+        assert native_json["decodeMethod"] == "native-arm64"
+        assert Path(native_json["outputPath"]).is_file()
+
+        native_profile = temp / "native-profile.json"
+        native_env = dict(os.environ)
+        native_env["LUOSHU_WOFF2_DECODER"] = str(fake_decoder)
+        native_profile_result = subprocess.run(
+            [
+                sys.executable, str(analyzer),
+                "--font", str(fake_woff2),
+                "--output", str(native_profile),
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=native_env,
+        )
+        assert native_profile_result.returncode == 0, native_profile_result.stderr or native_profile_result.stdout
+        native_profile_json = json.loads(native_profile.read_text(encoding="utf-8"))
+        assert native_profile_json["files"][0]["container"] == "WOFF2"
+        assert native_profile_json["files"][0]["analysisConversion"]["decodeMethod"] == "native-arm64"
+        assert native_profile_json["summary"]["requiresSfntConversion"] is True
 
         converted_profile = temp / "converted-profile.json"
         post = run([

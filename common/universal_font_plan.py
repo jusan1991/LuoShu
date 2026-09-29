@@ -731,16 +731,17 @@ def build_plan(
         "sourceProfileRevision": profile.get("profileRevision"),
         "sourceDigest": _source_digest(profile),
     }
+    constraints = _global_constraints(topology, missing_role_slots)
     semantic = {
         "inputs": inputs,
         "buildKey": build_key,
         "topologyRevision": topology.get("topologyRevision"),
         "roleRevision": roles.get("roleRevision"),
         "missingRoleSlots": missing_role_slots,
+        "constraints": constraints,
         "targets": targets,
     }
     plan_id = f"sha256:{_canonical_hash(semantic)}"
-    constraints = _global_constraints(topology, missing_role_slots)
     plan = {
         "schema": SCHEMA,
         "planRevision": PLAN_REVISION,
@@ -839,12 +840,16 @@ def validate_plan(
     missing_role_slots = plan.get("missingRoleSlots")
     if not isinstance(missing_role_slots, list):
         raise UniversalPlanError("Universal FontPlan 缺少 missingRoleSlots")
+    constraints = plan.get("constraints")
+    if not isinstance(constraints, dict):
+        raise UniversalPlanError("Universal FontPlan 缺少 constraints")
     semantic = {
         "inputs": inputs,
         "buildKey": device.get("buildKey"),
         "topologyRevision": device.get("topologyRevision"),
         "roleRevision": device.get("roleRevision"),
         "missingRoleSlots": missing_role_slots,
+        "constraints": constraints,
         "targets": targets,
     }
     expected_plan_id = f"sha256:{_canonical_hash(semantic)}"

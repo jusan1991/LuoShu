@@ -388,7 +388,9 @@ def _classification(
     else:
         action = "review"
 
-    current_replaceable = slot.get("replaceable")
+    current_replaceable = slot.get("legacyReplaceable")
+    if not isinstance(current_replaceable, bool):
+        current_replaceable = slot.get("replaceable")
     comparable = isinstance(current_replaceable, bool)
     shadow_candidate = action in {"replace", "conditional", "specialized"}
     if not comparable:

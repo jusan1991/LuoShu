@@ -145,11 +145,21 @@ Shadow 动作：
 - Phase 4 只能消费 Source Profile，不得重新散读多个旧探测器
 
 ### Phase 4 — Universal Replacement Planner
-状态：未开始
+状态：**进行中 / universal-font-plan-v1**
 
 输入：Phase 1 拓扑 + Phase 2 角色 + Phase 3 源字体能力。
 
 输出一份确定性 `FontPlan`，不得直接修改系统。
+
+标准产物：
+
+- `config/universal-font-plans/*.json`
+- Schema：`universal-font-plan-v1`
+- `planId` 必须由设备 buildKey、Source Profile 与确定性 targets 计算，重复输入必须得到同一 ID
+- Phase 4 可以选择具体 source face、目标字重、目标槽位与后续 compiler requirement
+- Phase 4 不允许生成字体文件、不允许 patch XML、不允许 mount、不允许声明 `executableNow=true`
+- Phase 5/6/7 只能消费 FontPlan，不能重新绕过它自行挑目标槽位
+
 
 计划必须说明：
 

@@ -401,15 +401,10 @@ def build_deployment(
         }
 
         runtime_manifest = stage / ".luoshu-runtime/deployment/deployment.json"
-        _atomic_json(runtime_manifest, payload)
-        runtime_manifest_hash = _sha256(runtime_manifest)
         payload["runtimeManifest"] = {
             "payloadPath": ".luoshu-runtime/deployment/deployment.json",
-            "sha256": runtime_manifest_hash,
+            "deploymentId": deployment_id,
         }
-
-        # Rewrite once with the final runtimeManifest descriptor. It is excluded
-        # from deploymentId/payloadDigest because it contains the manifest itself.
         _atomic_json(runtime_manifest, payload)
 
         if output_root.exists():

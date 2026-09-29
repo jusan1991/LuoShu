@@ -81,7 +81,7 @@ test "$(git -C "$WOFF2_SRC" rev-parse HEAD)" = "$WOFF2_COMMIT"
 test "$(git -C "$WOFF2_SRC/brotli" rev-parse HEAD)" = "$WOFF2_BROTLI_COMMIT"
 
 make -C "$WOFF2_SRC" -j2 all \
-  CC="$CC" CXX="$CXX" AR="$AR" \
+  CC="$CC" CXX="$CXX" AR="$AR" ARFLAGS=cr \
   COMMON_FLAGS='-O2 -fPIE -fno-omit-frame-pointer -no-canonical-prefixes -DFONT_COMPRESSION_BIN -D__STDC_FORMAT_MACROS' \
   LFLAGS='-fPIE -pie -static-libstdc++ -Wl,--build-id=none -Wl,-z,relro,-z,now' >/dev/null
 test -x "$WOFF2_SRC/woff2_decompress"

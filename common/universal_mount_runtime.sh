@@ -128,6 +128,16 @@ _ufmr_is_mounted() {
     awk -v path="$_ufmr_target" '$5 == path {found=1} END {exit !found}' "$_ufmr_mountinfo" 2>/dev/null
 }
 
+_ufmr_is_readonly() {
+    _ufmr_target="$1"
+    [ "${LUOSHU_UNIVERSAL_TEST_ASSUME_RO:-0}" = 1 ] && return 0
+    _ufmr_mountinfo="${LUOSHU_UNIVERSAL_MOUNTINFO:-/proc/self/mountinfo}"
+    awk -v path="$_ufmr_target" '
+        $5 == path && $6 ~ /(^|,)ro(,|$)/ {found=1}
+        END {exit !found}
+    ' "$_ufmr_mountinfo" 2>/dev/null
+}
+
 _ufmr_rollback_dynamic() {
     [ -s "$DYNAMIC_LIST" ] || return 0
     awk '{item[NR]=$0} END {for(i=NR;i>=1;i--) print item[i]}' "$DYNAMIC_LIST" 2>/dev/null | while IFS= read -r _ufmr_target; do
@@ -158,7 +168,14 @@ _ufmr_apply_dynamic() {
         _ufmr_mount --bind "$_ufmr_source" "$_ufmr_actual_target" >/dev/null 2>&1 || \
             _ufmr_mount -o bind "$_ufmr_source" "$_ufmr_actual_target" >/dev/null 2>&1 || return 1
         _ufmr_mount -o remount,bind,ro "$_ufmr_actual_target" >/dev/null 2>&1 || \
-            _ufmr_mount -o bind,remount,ro "$_ufmr_actual_target" >/dev/null 2>&1 || true
+            _ufmr_mount -o bind,remount,ro "$_ufmr_actual_target" >/dev/null 2>&1 || {
+                _ufmr_umount "$_ufmr_actual_target" >/dev/null 2>&1 || true
+                return 1
+            }
+        if ! _ufmr_is_readonly "$_ufmr_actual_target"; then
+            _ufmr_umount "$_ufmr_actual_target" >/dev/null 2>&1 || true
+            return 1
+        fi
         [ "$(_ufmr_hash "$_ufmr_actual_target")" = "$_ufmr_expected" ] || {
             _ufmr_umount "$_ufmr_actual_target" >/dev/null 2>&1 || true
             return 1

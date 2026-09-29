@@ -403,6 +403,38 @@ def main() -> int:
             "--validate", str(output),
         ])
         assert validated.returncode == 0, validated.stderr or validated.stdout
+        assert plan["inputs"]["topologyDigest"].startswith("sha256:")
+        assert plan["inputs"]["rolesDigest"].startswith("sha256:")
+
+        # A plan cannot be edited after creation without invalidating planId.
+        tampered = json.loads(output.read_text(encoding="utf-8"))
+        tampered["targets"]["/system/fonts/UiLatin-Bold.ttf"]["action"] = "preserve"
+        tampered_path = temp / "tampered-plan.json"
+        tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
+        tampered_result = run([
+            sys.executable, str(planner),
+            "--topology", str(topology),
+            "--roles", str(roles),
+            "--source-profile", str(profile),
+            "--validate", str(tampered_path),
+        ])
+        assert tampered_result.returncode != 0
+        assert "planId" in (tampered_result.stdout + tampered_result.stderr)
+
+        # The same buildKey with a changed topology is still a different input.
+        changed_topology_data = json.loads(json.dumps(topology_data))
+        changed_topology_data["slots"]["/system/fonts/UiLatin-Bold.ttf"]["metrics"]["weightClass"] = 600
+        changed_topology_path = temp / "changed-topology.json"
+        changed_topology_path.write_text(json.dumps(changed_topology_data), encoding="utf-8")
+        stale_result = run([
+            sys.executable, str(planner),
+            "--topology", str(changed_topology_path),
+            "--roles", str(roles),
+            "--source-profile", str(profile),
+            "--validate", str(output),
+        ])
+        assert stale_result.returncode != 0
+        assert "拓扑摘要" in (stale_result.stdout + stale_result.stderr)
 
         # A Latin-only source must block CJK/UI-CJK instead of silently falling
         # back to a Latin face, while leaving protected slots untouched.

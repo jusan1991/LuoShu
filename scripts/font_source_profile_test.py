@@ -123,14 +123,14 @@ def main() -> int:
         # FontTools must reject this synthetic WOFF2, then the test decoder emits
         # a known-good TTF beside the staged input, matching google/woff2 CLI semantics.
         fake_woff2 = temp / "fake-native.woff2"
-        fake_woff2.write_bytes(b"wOF2" + b"\\x00" * 32)
+        fake_woff2.write_bytes(b"wOF2" + b"\x00" * 32)
         fake_decoder = temp / "fake-woff2-decompress"
         fake_decoder.write_text(
-            "#!/usr/bin/env python3\\n"
-            "import shutil, sys\\n"
-            "from pathlib import Path\\n"
-            "source = Path(sys.argv[1])\\n"
-            f"shutil.copyfile({str(regular)!r}, str(source.with_suffix('.ttf')))\\n",
+            "#!/usr/bin/env python3\n"
+            "import shutil, sys\n"
+            "from pathlib import Path\n"
+            "source = Path(sys.argv[1])\n"
+            f"shutil.copyfile({str(regular)!r}, str(source.with_suffix('.ttf')))\n",
             encoding="utf-8",
         )
         fake_decoder.chmod(0o755)

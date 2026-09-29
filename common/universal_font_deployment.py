@@ -360,8 +360,20 @@ def build_deployment(
         contract_root = stage / ".luoshu-runtime/deployment"
         plan_snapshot = contract_root / "font-plan.json"
         artifact_snapshot = contract_root / "artifact-manifest.json"
-        _atomic_json(plan_snapshot, font_plan)
-        _atomic_json(artifact_snapshot, artifact_manifest)
+
+        # Strip non-semantic timestamps/cache locations before hashing the
+        # snapshots so an identical frozen plan still yields the same
+        # deployment identity across repeated prepare calls.
+        plan_contract = copy.deepcopy(font_plan)
+        plan_contract.pop("generatedAt", None)
+        artifact_contract = copy.deepcopy(artifact_manifest)
+        artifact_contract.pop("generatedAt", None)
+        for item in artifact_contract.get("artifacts") or []:
+            if isinstance(item, dict):
+                item.pop("output", None)
+                item.pop("stock", None)
+        _atomic_json(plan_snapshot, plan_contract)
+        _atomic_json(artifact_snapshot, artifact_contract)
         verification_contracts = {
             "fontPlan": {
                 "payloadPath": ".luoshu-runtime/deployment/font-plan.json",

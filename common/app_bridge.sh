@@ -21,6 +21,7 @@ UNIVERSAL_PLAN="$MODDIR/common/universal_font_plan.sh"
 MINIMAL_XML_ROUTER="$MODDIR/common/minimal_xml_router.sh"
 UNIVERSAL_COMPILER="$MODDIR/common/universal_font_compiler.sh"
 UNIVERSAL_DEPLOYMENT="$MODDIR/common/universal_font_deployment.sh"
+UNIVERSAL_VERIFY="$MODDIR/common/universal_font_runtime_verify.sh"
 PYROOT="$MODDIR/common/python"
 PYBIN="$PYROOT/bin/luoshu-python"
 USER_FONTS_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}/fonts"
@@ -110,15 +111,39 @@ status_json() {
     fi
     _active="$(head -n1 "$MODDIR/config/active_font.conf" 2>/dev/null | tr -d '\r\n')"
     [ -n "$_active" ] || _active='default'
-    _verification_file="$MODDIR/config/device-font-load-verification.conf"
-    _verification_state="$(read_prop "$_verification_file" state)"
-    _verification_mode="$(read_prop "$_verification_file" mode)"
-    _verification_reason="$(read_prop "$_verification_file" reason)"
-    _verification_active="$(read_prop "$_verification_file" activeFont)"
-    _mount_state="$(read_prop "$MODDIR/config/self-mount.conf" state)"
-    _mount_failed="$(read_prop "$MODDIR/config/self-mount.conf" failed)"
+    _universal_runtime="$MODDIR/config/universal-font-runtime.conf"
+    _universal_verification="$MODDIR/config/universal-font-runtime-verification.conf"
+    _verification_grade=''
+    if [ -s "$_universal_runtime" ] && [ -s "$_universal_verification" ]; then
+        _verification_file="$_universal_verification"
+        _verification_grade="$(read_prop "$_verification_file" grade)"
+        _verification_reason="$(read_prop "$_verification_file" reason)"
+        _verification_active="$(read_prop "$_verification_file" activeFont)"
+        case "$_verification_grade" in
+            PASS) _verification_state=verified; _verification_mode=universal-pass ;;
+            WARN) _verification_state=warning; _verification_mode=universal-warn ;;
+            FAIL) _verification_state=failed; _verification_mode=universal-fail ;;
+            *) _verification_state=pending; _verification_mode=universal-pending ;;
+        esac
+        _mount_state="$(read_prop "$MODDIR/config/universal-font-mount.conf" state)"
+        _mount_failed="$(read_prop "$MODDIR/config/universal-font-mount.conf" error)"
+    else
+        _verification_file="$MODDIR/config/device-font-load-verification.conf"
+        _verification_state="$(read_prop "$_verification_file" state)"
+        _verification_mode="$(read_prop "$_verification_file" mode)"
+        _verification_reason="$(read_prop "$_verification_file" reason)"
+        _verification_active="$(read_prop "$_verification_file" activeFont)"
+        _mount_state="$(read_prop "$MODDIR/config/self-mount.conf" state)"
+        _mount_failed="$(read_prop "$MODDIR/config/self-mount.conf" failed)"
+        case "$_verification_state" in
+            verified) _verification_grade=PASS ;;
+            failed) _verification_grade=FAIL ;;
+            *) _verification_grade=PENDING ;;
+        esac
+    fi
     [ -n "$_verification_state" ] || _verification_state='pending'
     [ -n "$_verification_mode" ] || _verification_mode='unknown'
+    [ -n "$_verification_grade" ] || _verification_grade='PENDING'
     [ -n "$_mount_state" ] || _mount_state='unknown'
 
     _selected="$(select_task_file)"
@@ -168,7 +193,7 @@ status_json() {
         fi
     elif [ "$_verification_state" = verified ]; then
         case "$_verification_mode" in
-            aligned|mount-verified|mount-confirmed)
+            aligned|mount-verified|mount-confirmed|universal-pass)
                 _effective_active="$_active"
                 _font_effect_state=verified
                 ;;
@@ -178,10 +203,10 @@ status_json() {
         _font_effect_state=unverified
     fi
 
-    printf '{"status":"ok","data":{"root":true,"installed":%s,"version":"%s","versionCode":%s,"active":"%s","effectiveActive":"%s","fontEffectState":"%s","verificationState":"%s","verificationMode":"%s","verificationReason":"%s","mountState":"%s","mountFailure":"%s","taskType":"%s","taskId":"%s","taskState":"%s","taskMessage":"%s","taskProgress":%s,"rebootRequired":%s,"rootManager":"%s","mountEngine":"%s","moduleDir":"%s"}}\n' \
+    printf '{"status":"ok","data":{"root":true,"installed":%s,"version":"%s","versionCode":%s,"active":"%s","effectiveActive":"%s","fontEffectState":"%s","verificationState":"%s","verificationGrade":"%s","verificationMode":"%s","verificationReason":"%s","mountState":"%s","mountFailure":"%s","taskType":"%s","taskId":"%s","taskState":"%s","taskMessage":"%s","taskProgress":%s,"rebootRequired":%s,"rootManager":"%s","mountEngine":"%s","moduleDir":"%s"}}\n' \
         "$_installed" "$(json_escape "$_version")" "${_version_code:-0}" "$(json_escape "$_active")" \
         "$(json_escape "$_effective_active")" "$(json_escape "$_font_effect_state")" \
-        "$(json_escape "$_verification_state")" "$(json_escape "$_verification_mode")" \
+        "$(json_escape "$_verification_state")" "$(json_escape "$_verification_grade")" "$(json_escape "$_verification_mode")" \
         "$(json_escape "$_verification_reason")" "$(json_escape "$_mount_state")" "$(json_escape "$_mount_failed")" \
         "$(json_escape "$_task_type")" "$(json_escape "$_task_id")" "$(json_escape "$_task_state")" \
         "$(json_escape "$_task_message")" "$_task_progress" "$_reboot_required" \
@@ -341,6 +366,14 @@ case "${1:-status}" in
     font_deployment)
         [ -f "$UNIVERSAL_DEPLOYMENT" ] || { printf '{"status":"error","message":"Universal Deployment 组件不可用"}\n'; exit 1; }
         MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$UNIVERSAL_DEPLOYMENT" prepare "${2:-}"
+        ;;
+    font_runtime_verify)
+        [ -f "$UNIVERSAL_VERIFY" ] || { printf '{"status":"error","message":"Runtime Verification 组件不可用"}\n'; exit 1; }
+        case "${2:-status}" in
+            run) MODDIR="$MODDIR" MODULE_DIR="$MODDIR" sh "$UNIVERSAL_VERIFY" run ;;
+            schedule) MODDIR="$MODDIR" MODULE_DIR="$MODDIR" sh "$UNIVERSAL_VERIFY" schedule ;;
+            *) MODDIR="$MODDIR" MODULE_DIR="$MODDIR" sh "$UNIVERSAL_VERIFY" status ;;
+        esac
         ;;
     prewarm)
         if [ -f "$SAFE_SWITCH" ]; then

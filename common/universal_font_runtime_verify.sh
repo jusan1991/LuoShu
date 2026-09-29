@@ -118,6 +118,9 @@ _uvr_terminal_failure() {
     _uvr_font="$2"
     _uvr_boot="$3"
     mkdir -p "$CONFIG_DIR" 2>/dev/null || true
+    # Never let a JSON result from the previous boot outrank this terminal
+    # failure in the status command.
+    rm -f "$OUTPUT_JSON" 2>/dev/null || true
     {
         printf 'schema=universal-font-runtime-verification-v1\n'
         printf 'grade=FAIL\n'
@@ -171,7 +174,6 @@ _uvr_run() {
     [ -s "$RUNTIME_CONF" ] || { _uvr_terminal_failure runtime-state-missing "$_uvr_font" "$_uvr_boot"; rm -f "$PID_FILE"; return 1; }
 
     _uvr_collect_font_dump || true
-    _uvr_args="--font-plan $_uvr_plan --artifact-manifest $_uvr_artifacts --deployment $_uvr_deployment --runtime-conf $RUNTIME_CONF --mount-state $MOUNT_STATE --font-dump $FONT_DUMP --mountinfo $_uvr_mountinfo --active-font $_uvr_font --boot-id $_uvr_boot --output-json $OUTPUT_JSON --output-conf $OUTPUT_CONF"
     if [ -n "${LUOSHU_VERIFY_VISIBLE_ROOT:-}" ]; then
         _uvr_python "$VERIFIER" \
             --font-plan "$_uvr_plan" \

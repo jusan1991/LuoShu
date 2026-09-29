@@ -443,6 +443,36 @@ def _xml_refs(slot: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(ref) for ref in raw if isinstance(ref, dict)]
 
 
+def _target_metrics_ready(slot: dict[str, Any]) -> bool:
+    metrics = slot.get("metrics")
+    if not isinstance(metrics, dict):
+        return False
+    upem = _int(metrics.get("upem"))
+    hhea = metrics.get("hhea") if isinstance(metrics.get("hhea"), dict) else {}
+    ascent = _int(hhea.get("ascent"))
+    descent = _int(hhea.get("descent"))
+    return (
+        upem is not None and 16 <= upem <= 16384
+        and ascent is not None and ascent > 0
+        and descent is not None and descent <= 0
+    )
+
+
+def _source_metrics_ready(face: dict[str, Any]) -> bool:
+    metrics = face.get("metrics")
+    if not isinstance(metrics, dict):
+        return False
+    upem = _int(metrics.get("unitsPerEm"))
+    hhea = metrics.get("hhea") if isinstance(metrics.get("hhea"), dict) else {}
+    ascent = _int(hhea.get("ascent"))
+    descent = _int(hhea.get("descent"))
+    return (
+        upem is not None and 16 <= upem <= 16384
+        and ascent is not None and ascent > 0
+        and descent is not None and descent <= 0
+    )
+
+
 def _compile_requirements(
     role: str,
     slot: dict[str, Any],
@@ -460,6 +490,12 @@ def _compile_requirements(
 
     if face.get("_conversionRequired") is True:
         requirements.append("sfnt-conversion")
+    if not _target_metrics_ready(slot):
+        requirements.append("stock-metrics-capture")
+        risks.append("target-metrics-missing")
+    if not _source_metrics_ready(face):
+        requirements.append("source-metrics-refresh")
+        risks.append("source-metrics-missing")
     if role in TEXT_ROLES:
         requirements.append("metrics-normalization")
     if role in SPECIALIZED_ROLES:

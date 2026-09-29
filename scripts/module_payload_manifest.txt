@@ -117,6 +117,8 @@ common/util_functions.sh
 common/util_functions_core.sh
 common/universal_font_plan.py
 common/universal_font_plan.sh
+common/minimal_xml_router.py
+common/minimal_xml_router.sh
 common/weighted_mix_task.sh
 common/python
 .luoshu-runtime

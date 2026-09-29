@@ -833,13 +833,42 @@ def _drop_stale_tables(font: TTFont) -> None:
         font["head"].checkSumAdjustment = 0
 
 
+def _validate_compiled_file(path: Path, expected_collection: bool) -> None:
+    if not path.is_file() or path.stat().st_size < 256:
+        raise CompilerError("编译输出异常为空或截断")
+    if expected_collection:
+        try:
+            collection = TTCollection(str(path), lazy=True)
+        except Exception as error:
+            raise CompilerError(f"编译集合字体无法重新解析：{error}") from error
+        try:
+            if not collection.fonts:
+                raise CompilerError("编译集合字体没有 face")
+            for index, font in enumerate(collection.fonts):
+                if "head" not in font or "cmap" not in font:
+                    raise CompilerError(f"编译集合 face {index} 缺少 head/cmap")
+                _outline_kind(font)
+        finally:
+            collection.close()
+        return
+    try:
+        font = TTFont(str(path), lazy=True, recalcTimestamp=False)
+    except Exception as error:
+        raise CompilerError(f"编译字体无法重新解析：{error}") from error
+    try:
+        if "head" not in font or "cmap" not in font:
+            raise CompilerError("编译字体缺少 head/cmap")
+        _outline_kind(font)
+    finally:
+        font.close()
+
+
 def _save_font(font: TTFont, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     temp = output.with_name(f".{output.name}.{os.getpid()}.tmp")
     try:
         font.save(str(temp), reorderTables=False)
-        if temp.stat().st_size < 4096:
-            raise CompilerError("编译输出异常为空")
+        _validate_compiled_file(temp, expected_collection=False)
         os.chmod(temp, 0o644)
         os.replace(temp, output)
     finally:
@@ -851,8 +880,7 @@ def _save_collection(collection: TTCollection, output: Path) -> None:
     temp = output.with_name(f".{output.name}.{os.getpid()}.tmp")
     try:
         collection.save(str(temp), shareTables=True)
-        if temp.stat().st_size < 4096:
-            raise CompilerError("集合字体编译输出异常为空")
+        _validate_compiled_file(temp, expected_collection=True)
         os.chmod(temp, 0o644)
         os.replace(temp, output)
     finally:

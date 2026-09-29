@@ -25,6 +25,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+import universal_font_plan
+
 SCHEMA = "minimal-xml-route-plan-v1"
 ROUTE_REVISION = 1
 FONT_PLAN_SCHEMA = "universal-font-plan-v1"
@@ -502,16 +504,12 @@ def _semantic_tree(tree: ET.ElementTree, replacement_ordinals: set[int] | None =
 
 
 def _validate_font_plan(font_plan: dict[str, Any]) -> None:
-    if font_plan.get("schema") != FONT_PLAN_SCHEMA or font_plan.get("state") != "planned":
+    if font_plan.get("schema") != FONT_PLAN_SCHEMA:
         raise RouterError("Universal FontPlan 未就绪")
-    if font_plan.get("mutatesSystem") is not False:
-        raise RouterError("Universal FontPlan 非只读计划")
-    summary = font_plan.get("summary")
-    if not isinstance(summary, dict) or summary.get("executableNow") is not False:
-        raise RouterError("Universal FontPlan 状态异常")
-    plan_id = str(font_plan.get("planId") or "")
-    if not plan_id.startswith("sha256:"):
-        raise RouterError("Universal FontPlan 缺少稳定 planId")
+    try:
+        universal_font_plan.validate_plan(font_plan)
+    except Exception as error:
+        raise RouterError(f"Universal FontPlan 完整性校验失败：{error}") from error
 
 
 def build_route_plan(

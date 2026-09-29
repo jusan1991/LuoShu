@@ -18,6 +18,7 @@ NATIVE_IMPORT="$MODDIR/common/native_import.sh"
 AXIS_INFO="$MODDIR/common/font_axis_info.py"
 SOURCE_PROFILE="$MODDIR/common/font_source_profile.sh"
 UNIVERSAL_PLAN="$MODDIR/common/universal_font_plan.sh"
+MINIMAL_XML_ROUTER="$MODDIR/common/minimal_xml_router.sh"
 PYROOT="$MODDIR/common/python"
 PYBIN="$PYROOT/bin/luoshu-python"
 USER_FONTS_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}/fonts"
@@ -326,6 +327,10 @@ case "${1:-status}" in
     universal_plan)
         [ -f "$UNIVERSAL_PLAN" ] || { printf '{"status":"error","message":"Universal FontPlan 组件不可用"}\n'; exit 1; }
         MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$UNIVERSAL_PLAN" build "${2:-}"
+        ;;
+    xml_route_plan)
+        [ -f "$MINIMAL_XML_ROUTER" ] || { printf '{"status":"error","message":"Minimal XML Router 组件不可用"}\n'; exit 1; }
+        MODDIR="$MODDIR" LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}" sh "$MINIMAL_XML_ROUTER" build "${2:-}"
         ;;
     prewarm)
         if [ -f "$SAFE_SWITCH" ]; then

@@ -72,7 +72,7 @@ invalidate_font_cache() {
     rm -f "$MODDIR/config/native_font_index.json" \
           "$MODDIR/config/native_font_index.key" \
           "$MODDIR/config/recent_fonts.conf" 2>/dev/null || true
-    rm -rf "$MODDIR/config/source-font-profiles" 2>/dev/null || true
+    rm -rf "$MODDIR/config/source-font-profiles" 2>/dev/null || true\n    rm -rf "$MODDIR/config/universal-font-plans" 2>/dev/null || true
 }
 
 schedule_font_prewarm() {

@@ -235,7 +235,7 @@ def build_deployment(
 
     parent = output_root.parent
     parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=parent))
+    stage: Path | None = Path(tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=parent))
     files: dict[str, dict[str, Any]] = {}
     dynamic_mounts: list[dict[str, Any]] = []
     dynamic_targets: set[str] = set()
@@ -410,10 +410,10 @@ def build_deployment(
         if output_root.exists():
             shutil.rmtree(output_root)
         os.replace(stage, output_root)
-        stage = Path()
+        stage = None
         return payload
     finally:
-        if stage and stage.exists():
+        if stage is not None and stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
 
 

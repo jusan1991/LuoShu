@@ -86,6 +86,27 @@ class HomeContractTest {
     }
 
     @Test
+    fun unresolvedUniversalFailureDoesNotPretendSystemDefaultIsAlreadyActive() {
+        val state = ModuleSnapshot(
+            loading = false,
+            installed = true,
+            rootGranted = true,
+            activeFont = "BadUniversal",
+            effectiveFont = "unknown",
+            fontEffectState = "failed",
+            verificationGrade = "FAIL",
+            verificationMode = "universal-fail",
+            verificationReason = "required-axis-missing",
+            mountState = "mounted",
+        ).toHomeUiState()
+
+        assertEquals("BadUniversal（运行验证失败）", state.currentFont)
+        assertEquals("字体未生效", state.taskTitle)
+        assertTrue(state.taskMessage.contains("无法安全确认"))
+        assertFalse(state.mountHealthy)
+    }
+
+    @Test
     fun dynamicConfigFailureProvidesAnActionableReason() {
         val state = ModuleSnapshot(
             loading = false,

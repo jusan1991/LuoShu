@@ -14,6 +14,10 @@ PLAN_BRIDGE="$MODDIR/common/universal_font_plan.sh"
 ROUTE_BRIDGE="$MODDIR/common/minimal_xml_router.sh"
 COMPILER_BRIDGE="$MODDIR/common/universal_font_compiler.sh"
 GATE="$MODDIR/common/universal_font_cutover_gate.py"
+DEPLOYER="$MODDIR/common/universal_font_deployment.py"
+ACTIVATED_CONF="$CONFIG_DIR/universal-font-activated.conf"
+VERIFY_CONF="$CONFIG_DIR/universal-font-runtime-verification.conf"
+ROLLBACK_STATE="$CONFIG_DIR/universal-font-rollback.conf"
 PYROOT="$MODDIR/common/python"
 PYBIN="$PYROOT/bin/luoshu-python"
 CUTOVER_STATE="$CONFIG_DIR/universal-font-cutover.conf"
@@ -45,6 +49,21 @@ _uc_python() {
     LD_LIBRARY_PATH="$PYROOT/lib:$PYROOT/lib/python3.14/lib-dynload${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         "$PYBIN" "$@"
 }
+
+_uc_value() {
+    sed -n "s/^${2}=//p" "$1" 2>/dev/null | head -n1 | tr -d '\r\n'
+}
+
+_uc_json_identity() {
+    _ucj_manifest="$1"
+    _uc_python - "$_ucj_manifest" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1],encoding='utf-8'))
+print(p.get('deploymentId',''))
+print(p.get('payloadDigest',''))
+PY
+}
+
 
 _uc_write_state() {
     _ucs_state="$1"; _ucs_font="$2"; _ucs_decision="$3"; _ucs_reason="$4"
@@ -170,12 +189,160 @@ _uc_switch() {
     return 0
 }
 
+_uc_write_rollback_state() {
+    _ucr_state="$1"; _ucr_target_font="$2"; _ucr_target_mode="$3"; _ucr_reason="$4"; _ucr_source="$5"
+    {
+        printf 'state=%s\n' "$_ucr_state"
+        printf 'targetFont=%s\n' "$_ucr_target_font"
+        printf 'targetMode=%s\n' "$_ucr_target_mode"
+        printf 'reason=%s\n' "$_ucr_reason"
+        printf 'source=%s\n' "$_ucr_source"
+        printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+    } > "$ROLLBACK_STATE.tmp.$" 2>/dev/null && mv -f "$ROLLBACK_STATE.tmp.$" "$ROLLBACK_STATE" 2>/dev/null || true
+    chmod 0600 "$ROLLBACK_STATE" 2>/dev/null || true
+}
+
+_uc_copy_retired_to_next() {
+    _ucr_source="$1"
+    _ucr_stage="$MODDIR/.luoshu-payload-next.recovery.$"
+    _ucr_next="$MODDIR/.luoshu-payload-next"
+    rm -rf "$_ucr_stage" 2>/dev/null || true
+    mkdir -p "$_ucr_stage" 2>/dev/null || return 1
+    cp -af "$_ucr_source/." "$_ucr_stage/" 2>/dev/null || {
+        rm -rf "$_ucr_stage" 2>/dev/null || true
+        return 1
+    }
+    rm -rf "$_ucr_next" 2>/dev/null || true
+    mv "$_ucr_stage" "$_ucr_next" 2>/dev/null || {
+        rm -rf "$_ucr_stage" 2>/dev/null || true
+        return 1
+    }
+    return 0
+}
+
+_uc_schedule_rollback() {
+    _ucr_boot="${1:-}"
+    [ -s "$VERIFY_CONF" ] || return 2
+    [ "$(_uc_value "$VERIFY_CONF" grade)" = FAIL ] || return 2
+    [ -s "$ACTIVATED_CONF" ] || return 2
+
+    _ucr_verified_boot=$(_uc_value "$VERIFY_CONF" bootId)
+    _ucr_activated_boot=$(_uc_value "$ACTIVATED_CONF" bootId)
+    [ -n "$_ucr_boot" ] || _ucr_boot="$_ucr_verified_boot"
+    [ -n "$_ucr_boot" ] && [ "$_ucr_verified_boot" = "$_ucr_boot" ] && [ "$_ucr_activated_boot" = "$_ucr_boot" ] || {
+        _uc_write_rollback_state skipped '' '' boot-identity-mismatch ''
+        return 2
+    }
+
+    _ucr_recovery=$(_uc_value "$ACTIVATED_CONF" recovery)
+    if [ "$_ucr_recovery" = true ]; then
+        _uc_write_rollback_state suppressed '' '' recovery-already-attempted ''
+        _uc_log "rollback suppressed: current deployment is already a recovery activation"
+        return 2
+    fi
+
+    # Never overwrite a newer user request created after boot.
+    if [ -s "$CONFIG_DIR/universal-font-next.conf" ] || [ -s "$CONFIG_DIR/font-payload-next.conf" ] || [ -d "$MODDIR/.luoshu-payload-next" ]; then
+        _uc_write_rollback_state deferred '' '' newer-next-boot-request-present ''
+        _uc_log "rollback deferred because a newer next-boot request already exists"
+        return 2
+    fi
+
+    _ucr_retired=$(_uc_value "$ACTIVATED_CONF" retired)
+    case "$_ucr_retired" in
+        "$MODDIR"/.luoshu-retired/universal-*) ;;
+        *)
+            _uc_write_rollback_state failed '' '' retired-path-untrusted "$_ucr_retired"
+            return 1
+            ;;
+    esac
+    [ -d "$_ucr_retired" ] || {
+        _uc_write_rollback_state failed '' '' retired-payload-missing "$_ucr_retired"
+        return 1
+    }
+
+    _ucr_previous_font=$(_uc_value "$ACTIVATED_CONF" previousFont)
+    _ucr_previous_mode=$(_uc_value "$ACTIVATED_CONF" previousMode)
+    _ucr_previous_legacy=$(_uc_value "$ACTIVATED_CONF" previousLegacy)
+    _ucr_current_font=$(_uc_value "$ACTIVATED_CONF" font)
+    [ -n "$_ucr_previous_font" ] || _ucr_previous_font=default
+    [ -n "$_ucr_previous_mode" ] || {
+        if [ "$_ucr_previous_legacy" = true ]; then _ucr_previous_mode=legacy
+        elif [ "$_ucr_previous_font" = default ]; then _ucr_previous_mode=default
+        else _ucr_previous_mode=classic
+        fi
+    }
+
+    if [ "$_ucr_previous_mode" = universal ]; then
+        _ucr_manifest="$_ucr_retired/.luoshu-runtime/deployment/deployment.json"
+        [ -f "$DEPLOYER" ] && [ -s "$_ucr_manifest" ] || {
+            _uc_write_rollback_state failed "$_ucr_previous_font" universal retired-universal-manifest-missing "$_ucr_retired"
+            return 1
+        }
+        _uc_python "$DEPLOYER" --payload-root "$_ucr_retired" --validate-payload-only "$_ucr_manifest" >/dev/null 2>&1 || {
+            _uc_write_rollback_state failed "$_ucr_previous_font" universal retired-universal-integrity-failed "$_ucr_retired"
+            return 1
+        }
+        _ucr_identity=$(_uc_json_identity "$_ucr_manifest") || return 1
+        _ucr_id=$(printf '%s\n' "$_ucr_identity" | sed -n '1p')
+        _ucr_digest=$(printf '%s\n' "$_ucr_identity" | sed -n '2p')
+        [ -n "$_ucr_id" ] && [ -n "$_ucr_digest" ] || return 1
+        _uc_copy_retired_to_next "$_ucr_retired" || return 1
+        rm -f "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || true
+        {
+            printf 'state=prepared\n'
+            printf 'font=%s\n' "$_ucr_previous_font"
+            printf 'deploymentId=%s\n' "$_ucr_id"
+            printf 'payloadDigest=%s\n' "$_ucr_digest"
+            printf 'previousFont=%s\n' "${_ucr_current_font:-default}"
+            printf 'previousMode=universal\n'
+            printf 'previousLegacy=false\n'
+            printf 'recovery=true\n'
+            printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+        } > "$CONFIG_DIR/universal-font-next.conf.tmp.$" 2>/dev/null && \
+            mv -f "$CONFIG_DIR/universal-font-next.conf.tmp.$" "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || return 1
+        chmod 0600 "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || true
+    else
+        _uc_copy_retired_to_next "$_ucr_retired" || return 1
+        rm -f "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || true
+        _ucr_target_legacy=false
+        [ "$_ucr_previous_mode" = legacy ] && _ucr_target_legacy=true
+        {
+            printf 'state=prepared\n'
+            printf 'font=%s\n' "$_ucr_previous_font"
+            printf 'previousFont=%s\n' "${_ucr_current_font:-default}"
+            printf 'previousLegacy=false\n'
+            printf 'targetMode=%s\n' "$_ucr_previous_mode"
+            printf 'recovery=true\n'
+            printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+        } > "$CONFIG_DIR/font-payload-next.conf.tmp.$" 2>/dev/null && \
+            mv -f "$CONFIG_DIR/font-payload-next.conf.tmp.$" "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || return 1
+        chmod 0644 "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || true
+    fi
+
+    {
+        printf 'font=%s\n' "$_ucr_previous_font"
+        printf 'reason=universal-runtime-verification-failed-rollback\n'
+        printf 'targetMode=%s\n' "$_ucr_previous_mode"
+        printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+    } > "$CONFIG_DIR/text_reboot_required.conf.tmp.$" 2>/dev/null && \
+        mv -f "$CONFIG_DIR/text_reboot_required.conf.tmp.$" "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
+    chmod 0644 "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
+
+    _uc_write_rollback_state staged "$_ucr_previous_font" "$_ucr_previous_mode" runtime-verification-failed "$_ucr_retired"
+    _uc_write_state rollback-staged "${_ucr_current_font:-unknown}" rollback "$_ucr_previous_mode:$_ucr_previous_font"
+    _uc_log "runtime FAIL rollback staged target=$_ucr_previous_font mode=$_ucr_previous_mode source=$_ucr_retired"
+    printf '{"status":"ok","state":"rollback-staged","targetFont":"%s","targetMode":"%s"}\n' "$_ucr_previous_font" "$_ucr_previous_mode"
+    return 0
+}
+
 case "${1:-switch}" in
     switch) _uc_switch "${2:-}" ;;
+    rollback-from-fail) _uc_schedule_rollback "${2:-}" ;;
     status)
         if [ -s "$CUTOVER_STATE" ]; then cat "$CUTOVER_STATE"
         else printf 'state=idle\ndecision=none\n'
         fi
         ;;
-    *) echo "Usage: $0 {switch|status} <font-family>" >&2; exit 2 ;;
+    *) echo "Usage: $0 {switch|rollback-from-fail|status} [font-family|boot-id]" >&2; exit 2 ;;
 esac

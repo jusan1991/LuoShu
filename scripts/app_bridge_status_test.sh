@@ -68,4 +68,29 @@ assert_status unknown pending stale-verification
 touch "$CONFIG/text_reboot_required.conf"
 assert_status unknown pending-reboot ''
 
-printf 'LuoShu App bridge distinguishes configured and effective fonts.\n'
+# Universal production mode consumes Phase 8 grade and exposes Phase 9 rollback state.
+rm -f "$CONFIG/text_reboot_required.conf" "$CONFIG/device-font-load-verification.conf"
+printf 'UniversalFont\n' >"$CONFIG/active_font.conf"
+printf 'state=active\nfont=UniversalFont\ndeploymentId=u1\npayloadDigest=d1\n' >"$CONFIG/universal-font-runtime.conf"
+printf 'state=mounted\ndeploymentId=u1\npayloadDigest=d1\n' >"$CONFIG/universal-font-mount.conf"
+printf 'grade=PASS\nstate=pass\nmode=universal-runtime\nreason=runtime-verified\nactiveFont=UniversalFont\n' \
+    >"$CONFIG/universal-font-runtime-verification.conf"
+assert_status UniversalFont verified runtime-verified
+
+printf 'grade=FAIL\nstate=fail\nmode=universal-runtime\nreason=coverage-digits-missing\nactiveFont=UniversalFont\n' \
+    >"$CONFIG/universal-font-runtime-verification.conf"
+printf 'state=staged\ntargetFont=OldFont\ntargetMode=legacy\nreason=runtime-verification-failed\n' \
+    >"$CONFIG/universal-font-rollback.conf"
+touch "$CONFIG/text_reboot_required.conf"
+assert_status unknown rollback-pending coverage-digits-missing
+_output=$(MODDIR="$MODULE" sh "$ROOT/common/app_bridge.sh" status)
+printf '%s' "$_output" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)["data"]
+assert data["rollbackPending"] is True, data
+assert data["rollbackState"] == "staged", data
+assert data["rollbackTargetFont"] == "OldFont", data
+assert data["rollbackTargetMode"] == "legacy", data
+' 
+
+printf 'LuoShu App bridge distinguishes configured, effective and rollback fonts.\n'

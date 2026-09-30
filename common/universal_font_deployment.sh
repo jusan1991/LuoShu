@@ -216,6 +216,19 @@ _ud_stage_prepared() {
     } > "$_uds_state.tmp.$$" 2>/dev/null && mv -f "$_uds_state.tmp.$$" "$_uds_state" 2>/dev/null || return 1
     chmod 0600 "$_uds_state" 2>/dev/null || true
 
+    # active_font.conf is the user's configured selection, not a claim that this
+    # boot already renders it. Keep it in sync immediately; App status uses the
+    # reboot marker/effectiveActive to distinguish configured vs. effective font.
+    _uds_active="$CONFIG_DIR/active_font.conf"
+    printf '%s\n' "$_uds_family" > "$_uds_active.tmp.$" 2>/dev/null && \
+        mv -f "$_uds_active.tmp.$" "$_uds_active" 2>/dev/null || {
+            rm -f "$_uds_state" "$_uds_active.tmp.$" 2>/dev/null || true
+            rm -rf "$_uds_next" 2>/dev/null || true
+            printf '%s\n' "$UD_PREVIOUS_FONT" > "$_uds_active" 2>/dev/null || true
+            return 1
+        }
+    chmod 0644 "$_uds_active" 2>/dev/null || true
+
     _uds_reboot="$CONFIG_DIR/text_reboot_required.conf"
     {
         printf 'font=%s\n' "$_uds_family"
@@ -223,7 +236,13 @@ _ud_stage_prepared() {
         printf 'pipeline=universal-font-deployment-v1\n'
         printf 'deploymentId=%s\n' "$_uds_id"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$_uds_reboot.tmp.$$" 2>/dev/null && mv -f "$_uds_reboot.tmp.$$" "$_uds_reboot" 2>/dev/null || true
+    } > "$_uds_reboot.tmp.$" 2>/dev/null && mv -f "$_uds_reboot.tmp.$" "$_uds_reboot" 2>/dev/null || {
+        rm -f "$_uds_state" "$_uds_reboot.tmp.$" 2>/dev/null || true
+        rm -rf "$_uds_next" 2>/dev/null || true
+        printf '%s\n' "$UD_PREVIOUS_FONT" > "$_uds_active" 2>/dev/null || true
+        chmod 0644 "$_uds_active" 2>/dev/null || true
+        return 1
+    }
     chmod 0644 "$_uds_reboot" 2>/dev/null || true
 
     printf '{"status":"ok","state":"staged-next-boot","pipeline":"universal","fallback":false,"deploymentId":"%s","previousMode":"%s"}\n' \

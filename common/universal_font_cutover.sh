@@ -200,13 +200,13 @@ _uc_write_rollback_state() {
         printf 'reason=%s\n' "$_ucr_reason"
         printf 'source=%s\n' "$_ucr_source"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$ROLLBACK_STATE.tmp.$" 2>/dev/null && mv -f "$ROLLBACK_STATE.tmp.$" "$ROLLBACK_STATE" 2>/dev/null || true
+    } > "$ROLLBACK_STATE.tmp.$$" 2>/dev/null && mv -f "$ROLLBACK_STATE.tmp.$$" "$ROLLBACK_STATE" 2>/dev/null || true
     chmod 0600 "$ROLLBACK_STATE" 2>/dev/null || true
 }
 
 _uc_copy_retired_to_next() {
     _ucr_source="$1"
-    _ucr_stage="$MODDIR/.luoshu-payload-next.recovery.$"
+    _ucr_stage="$MODDIR/.luoshu-payload-next.recovery.$$"
     _ucr_next="$MODDIR/.luoshu-payload-next"
     rm -rf "$_ucr_stage" 2>/dev/null || true
     mkdir -p "$_ucr_stage" 2>/dev/null || return 1
@@ -301,8 +301,8 @@ _uc_schedule_rollback() {
             printf 'previousLegacy=false\n'
             printf 'recovery=true\n'
             printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-        } > "$CONFIG_DIR/universal-font-next.conf.tmp.$" 2>/dev/null && \
-            mv -f "$CONFIG_DIR/universal-font-next.conf.tmp.$" "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || return 1
+        } > "$CONFIG_DIR/universal-font-next.conf.tmp.$$" 2>/dev/null && \
+            mv -f "$CONFIG_DIR/universal-font-next.conf.tmp.$$" "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || return 1
         chmod 0600 "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || true
     else
         _uc_copy_retired_to_next "$_ucr_retired" || return 1
@@ -317,8 +317,8 @@ _uc_schedule_rollback() {
             printf 'targetMode=%s\n' "$_ucr_previous_mode"
             printf 'recovery=true\n'
             printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-        } > "$CONFIG_DIR/font-payload-next.conf.tmp.$" 2>/dev/null && \
-            mv -f "$CONFIG_DIR/font-payload-next.conf.tmp.$" "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || return 1
+        } > "$CONFIG_DIR/font-payload-next.conf.tmp.$$" 2>/dev/null && \
+            mv -f "$CONFIG_DIR/font-payload-next.conf.tmp.$$" "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || return 1
         chmod 0644 "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || true
     fi
 
@@ -327,8 +327,8 @@ _uc_schedule_rollback() {
         printf 'reason=universal-runtime-verification-failed-rollback\n'
         printf 'targetMode=%s\n' "$_ucr_previous_mode"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$CONFIG_DIR/text_reboot_required.conf.tmp.$" 2>/dev/null && \
-        mv -f "$CONFIG_DIR/text_reboot_required.conf.tmp.$" "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
+    } > "$CONFIG_DIR/text_reboot_required.conf.tmp.$$" 2>/dev/null && \
+        mv -f "$CONFIG_DIR/text_reboot_required.conf.tmp.$$" "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
     chmod 0644 "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
 
     _uc_write_rollback_state staged "$_ucr_previous_font" "$_ucr_previous_mode" runtime-verification-failed "$_ucr_retired"

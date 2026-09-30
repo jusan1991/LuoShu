@@ -42,11 +42,12 @@ internal fun ModuleSnapshot.toHomeUiState(): HomeUiState {
         rootManager = rootManager,
         moduleInstalled = installed,
         mountEngine = mountEngine,
-        mountHealthy = installed && mountState != "failed" &&
+        mountHealthy = installed && !effectFailed && mountState != "failed" &&
             (activeFont in setOf("", "default") || rebootRequired || mountState == "mounted"),
         taskRunning = running,
         taskTitle = when {
             running -> "字体任务执行中"
+            rollbackPending || fontEffectState == "rollback-pending" -> "正在等待安全回退"
             effectFailed -> "字体未生效"
             installed && rootGranted -> "字体引擎已就绪"
             installed -> "模块已连接"

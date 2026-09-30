@@ -284,7 +284,7 @@ Shadow 动作：
 最终给用户 PASS / WARN / FAIL，而不是让用户盲测。
 
 ### Phase 9 — Controlled Production Cutover
-状态：**进行中 / universal-font-production-cutover-v1**
+状态：**已完成 / PR #262 / universal-font-production-cutover-v1**
 
 目标：
 

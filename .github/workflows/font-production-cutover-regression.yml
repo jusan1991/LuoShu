@@ -1,0 +1,71 @@
+name: Universal Font Production Cutover regression
+
+on:
+  pull_request:
+    paths:
+      - common/universal_font_cutover_gate.py
+      - common/universal_font_cutover.sh
+      - common/universal_font_deployment.py
+      - common/universal_font_deployment.sh
+      - common/universal_next_boot.sh
+      - common/universal_font_runtime_verify.py
+      - common/universal_font_runtime_verify.sh
+      - common/next_boot_payload.sh
+      - common/font_manager.sh
+      - common/font_switch_task.sh
+      - common/app_bridge.sh
+      - scripts/universal_font_cutover_gate_test.py
+      - scripts/universal_font_cutover_test.sh
+      - scripts/universal_cutover_next_boot_test.sh
+      - scripts/universal_font_deployment_test.py
+      - scripts/universal_font_runtime_verify_test.py
+      - scripts/module_payload_manifest.txt
+      - docs/UNIVERSAL_FONT_ENGINE_REFACTOR.md
+      - .github/workflows/font-production-cutover-regression.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-cutover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install font dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check 'fonttools==4.63.0'
+      - name: Validate Phase 9 cutover
+        run: |
+          set -eu
+          python3 -m py_compile \
+            common/universal_font_cutover_gate.py \
+            common/universal_font_deployment.py \
+            common/universal_font_runtime_verify.py \
+            scripts/universal_font_cutover_gate_test.py \
+            scripts/universal_font_runtime_verify_test.py
+          sh -n common/universal_font_cutover.sh
+          sh -n common/universal_font_deployment.sh
+          sh -n common/universal_next_boot.sh
+          sh -n common/universal_font_runtime_verify.sh
+          sh -n common/next_boot_payload.sh
+          sh -n common/font_manager.sh
+          sh -n common/font_switch_task.sh
+          sh -n common/app_bridge.sh
+          sh -n scripts/universal_font_cutover_test.sh
+          sh -n scripts/universal_cutover_next_boot_test.sh
+
+          python3 scripts/universal_font_cutover_gate_test.py
+          python3 scripts/universal_font_deployment_test.py
+          python3 scripts/universal_font_runtime_verify_test.py
+          sh scripts/universal_font_cutover_test.sh
+          sh scripts/universal_cutover_next_boot_test.sh
+
+          grep -qx 'common/universal_font_cutover_gate.py' scripts/module_payload_manifest.txt
+          grep -qx 'common/universal_font_cutover.sh' scripts/module_payload_manifest.txt
+          grep -qx 'common/universal_font_runtime_verify.py' scripts/module_payload_manifest.txt
+          grep -qx 'common/universal_font_runtime_verify.sh' scripts/module_payload_manifest.txt

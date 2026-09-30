@@ -30,10 +30,17 @@ internal data class ModuleSnapshot(
     val effectiveFont: String = "unknown",
     val fontEffectState: String = "unknown",
     val verificationState: String = "unknown",
+    val verificationGrade: String = "PENDING",
     val verificationMode: String = "unknown",
     val verificationReason: String = "",
     val mountState: String = "unknown",
     val mountFailure: String = "",
+    val cutoverState: String = "idle",
+    val cutoverDecision: String = "none",
+    val rollbackState: String = "none",
+    val rollbackPending: Boolean = false,
+    val rollbackTargetFont: String = "",
+    val rollbackTargetMode: String = "",
     val taskType: String = "none",
     val taskId: String = "",
     val taskState: String = "idle",
@@ -51,8 +58,17 @@ internal data class ModuleSnapshot(
             else -> activeFont
         }
 
+    val rollbackTargetLabel: String
+        get() = when (rollbackTargetFont) {
+            "", "unknown" -> "上一份可用字体"
+            "default" -> "系统默认字体"
+            else -> rollbackTargetFont
+        }
+
     val effectiveLabel: String
         get() = when {
+            rollbackPending || fontEffectState == "rollback-pending" ->
+                "${activeLabel}（验证失败，待重启恢复 ${rollbackTargetLabel}）"
             activeFont in setOf("", "default") || fontEffectState == "system" -> "系统默认字体"
             fontEffectState == "verified" && effectiveFont == activeFont -> activeLabel
             fontEffectState == "failed" -> "系统默认字体（${activeLabel}未生效）"
@@ -61,10 +77,13 @@ internal data class ModuleSnapshot(
         }
 
     val effectFailed: Boolean
-        get() = activeFont !in setOf("", "default") && fontEffectState == "failed"
+        get() = activeFont !in setOf("", "default") &&
+            (fontEffectState == "failed" || fontEffectState == "rollback-pending" || rollbackPending)
 
     val effectFailureMessage: String
         get() = when {
+            rollbackPending || fontEffectState == "rollback-pending" ->
+                "通用字体运行验证失败，已准备安全回退到 ${rollbackTargetLabel}；完整重启后恢复"
             mountFailure.isNotBlank() -> "自挂载失败（${mountFailure}），已安全回滚到系统字体"
             else -> when (verificationReason) {
                 "self-mount-not-visible" -> "开机挂载未完整生效，系统已安全使用默认字体"
@@ -863,10 +882,17 @@ internal class LuoShuViewModel(application: Application) : AndroidViewModel(appl
                 effectiveFont = data.optString("effectiveActive", "unknown"),
                 fontEffectState = data.optString("fontEffectState", "unknown"),
                 verificationState = data.optString("verificationState", "unknown"),
+                verificationGrade = data.optString("verificationGrade", "PENDING"),
                 verificationMode = data.optString("verificationMode", "unknown"),
                 verificationReason = data.optString("verificationReason", ""),
                 mountState = data.optString("mountState", "unknown"),
                 mountFailure = data.optString("mountFailure", ""),
+                cutoverState = data.optString("cutoverState", "idle"),
+                cutoverDecision = data.optString("cutoverDecision", "none"),
+                rollbackState = data.optString("rollbackState", "none"),
+                rollbackPending = data.optBoolean("rollbackPending", false),
+                rollbackTargetFont = data.optString("rollbackTargetFont", ""),
+                rollbackTargetMode = data.optString("rollbackTargetMode", ""),
                 taskType = data.optString("taskType", "none"),
                 taskId = data.optString("taskId", ""),
                 taskState = data.optString("taskState", "idle"),

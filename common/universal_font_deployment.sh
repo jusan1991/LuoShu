@@ -213,7 +213,11 @@ _ud_stage_prepared() {
         printf 'previousPayloadDigest=%s\n' "$UD_PREVIOUS_PAYLOAD_DIGEST"
         printf 'recovery=false\n'
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$_uds_state.tmp.$$" 2>/dev/null && mv -f "$_uds_state.tmp.$$" "$_uds_state" 2>/dev/null || return 1
+    } > "$_uds_state.tmp.$$" 2>/dev/null && mv -f "$_uds_state.tmp.$$" "$_uds_state" 2>/dev/null || {
+        rm -f "$_uds_state" "$_uds_state.tmp.$$" "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
+        rm -rf "$_uds_next" 2>/dev/null || true
+        return 1
+    }
     chmod 0600 "$_uds_state" 2>/dev/null || true
 
     # active_font.conf is the user's configured selection, not a claim that this
@@ -222,7 +226,7 @@ _ud_stage_prepared() {
     _uds_active="$CONFIG_DIR/active_font.conf"
     printf '%s\n' "$_uds_family" > "$_uds_active.tmp.$$" 2>/dev/null && \
         mv -f "$_uds_active.tmp.$$" "$_uds_active" 2>/dev/null || {
-            rm -f "$_uds_state" "$_uds_active.tmp.$$" 2>/dev/null || true
+            rm -f "$_uds_state" "$_uds_active.tmp.$$" "$CONFIG_DIR/text_reboot_required.conf" 2>/dev/null || true
             rm -rf "$_uds_next" 2>/dev/null || true
             printf '%s\n' "$UD_PREVIOUS_FONT" > "$_uds_active" 2>/dev/null || true
             return 1
@@ -237,7 +241,7 @@ _ud_stage_prepared() {
         printf 'deploymentId=%s\n' "$_uds_id"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
     } > "$_uds_reboot.tmp.$$" 2>/dev/null && mv -f "$_uds_reboot.tmp.$$" "$_uds_reboot" 2>/dev/null || {
-        rm -f "$_uds_state" "$_uds_reboot.tmp.$$" 2>/dev/null || true
+        rm -f "$_uds_state" "$_uds_reboot" "$_uds_reboot.tmp.$$" 2>/dev/null || true
         rm -rf "$_uds_next" 2>/dev/null || true
         printf '%s\n' "$UD_PREVIOUS_FONT" > "$_uds_active" 2>/dev/null || true
         chmod 0644 "$_uds_active" 2>/dev/null || true

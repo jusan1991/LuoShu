@@ -122,6 +122,8 @@ _uc_paths() {
 _uc_switch() {
     _uc_font="$1"
     [ -n "$_uc_font" ] || { printf '{"status":"error","message":"未指定字体"}\n'; return 1; }
+    # A new explicit user choice supersedes any previously staged automatic rollback.
+    rm -f "$ROLLBACK_STATE" 2>/dev/null || true
 
     # System default and composite temporary families stay on the proven legacy
     # production path during controlled rollout.

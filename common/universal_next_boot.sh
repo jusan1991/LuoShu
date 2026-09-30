@@ -182,7 +182,8 @@ universal_font_next_boot_activate() {
           "$_ufnb_cfg/text_reboot_required.conf" \
           "$_ufnb_cfg/universal-font-runtime-verification.conf" \
           "$_ufnb_cfg/universal-font-runtime-verification.json" \
-          "$_ufnb_cfg/universal-font-mount.conf" 2>/dev/null || true
+          "$_ufnb_cfg/universal-font-mount.conf" \
+          "$_ufnb_cfg/universal-font-rollback.conf" 2>/dev/null || true
     rm -rf "$_ufnb_backup" 2>/dev/null || true
     _ufnb_log "activated deployment=$_ufnb_id font=$_ufnb_font previous=$_ufnb_previous_font mode=$_ufnb_previous_mode recovery=$_ufnb_recovery retired=$_ufnb_retired"
     return 0

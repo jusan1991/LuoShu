@@ -1,8 +1,8 @@
 #!/system/bin/sh
 # LuoShu native App font-manager router.
 # Inventory, preview, delete and weight actions stay on the current manager.
-# Final font apply uses the isolated safe physical switch core, which builds the
-# next-boot payload off-line and never rewrites the source tree mounted by this boot.
+# Final font apply enters the Phase 9 cutover controller. Universal is attempted
+# first for eligible single-font switches; the isolated physical switch remains fallback.
 # Source-check compatibility markers owned by font_manager_v4.sh: native-v3 manifest-fast
 # The current inventory contract remains config/native_font_index.json.
 set +e
@@ -17,6 +17,7 @@ if [ -z "$MODDIR" ]; then
 fi
 LUOSHU_PUBLIC_DIR="${LUOSHU_PUBLIC_DIR:-/sdcard/LuoShu}"
 CURRENT_MANAGER="$MODDIR/common/font_manager_v4.sh"
+CUTOVER_SWITCH="$MODDIR/common/universal_font_cutover.sh"
 SAFE_SWITCH="$MODDIR/common/legacy_v14_4/font_switch_safe.sh"
 LEGACY_SWITCH="$MODDIR/common/legacy_v14_4_switch.sh"
 PYROOT="$MODDIR/common/python"
@@ -148,6 +149,9 @@ if [ "${1:-}" = action ] && [ "${2:-}" = switch ]; then
                 export LUOSHU_SWITCH_ACTIVE_LABEL
                 ;;
         esac
+    fi
+    if [ -f "$CUTOVER_SWITCH" ]; then
+        exec sh "$CUTOVER_SWITCH" switch "${3:-}"
     fi
     if [ -f "$SAFE_SWITCH" ]; then
         exec sh "$SAFE_SWITCH" "$@"

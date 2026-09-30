@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "common"))
+
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.t2CharStringPen import T2CharStringPen
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib import TTCollection, TTFont
+
+import font_inventory
+import font_source_profile
+import minimal_xml_router
+import universal_font_compiler as compiler
+import universal_font_plan
+
+ASCII_POINTS = tuple(range(0x20, 0x7F))
+
+
+def make_font(
+    path: Path,
+    *,
+    family: str,
+    weight: int = 400,
+    upem: int = 1000,
+    ascent: int = 900,
+    descent: int = -220,
+    advance: int = 620,
+    y_min: int = -120,
+    y_max: int = 720,
+    cff: bool = False,
+    variable: bool = False,
+    axis_min: int = 100,
+    axis_max: int = 900,
+) -> None:
+    cmap = {cp: f"u{cp:04X}" for cp in ASCII_POINTS}
+    order = [".notdef", *cmap.values()]
+    builder = FontBuilder(upem, isTTF=not cff)
+    builder.setupGlyphOrder(order)
+    builder.setupCharacterMap(cmap)
+
+    glyphs = {}
+    for name in order:
+        if cff:
+            pen = T2CharStringPen(advance, None)
+        else:
+            pen = TTGlyphPen(None)
+        if name != ".notdef":
+            pen.moveTo((40, y_min))
+            pen.lineTo((advance - 50, y_min))
+            pen.lineTo((advance - 50, y_max))
+            pen.lineTo((40, y_max))
+            pen.closePath()
+        glyphs[name] = pen.getCharString() if cff else pen.glyph()
+
+    if cff:
+        ps = family.replace(" ", "") + "-Regular"
+        builder.setupCFF(ps, {"FullName": family}, glyphs, {})
+    else:
+        builder.setupGlyf(glyphs)
+
+    builder.setupHorizontalMetrics({name: (advance, 40) for name in order})
+    builder.setupHorizontalHeader(ascent=ascent, descent=descent)
+    builder.setupOS2(
+        usWeightClass=weight,
+        sTypoAscender=ascent,
+        sTypoDescender=descent,
+        sTypoLineGap=0,
+        usWinAscent=max(0, ascent),
+        usWinDescent=abs(descent),
+    )
+    builder.setupNameTable({
+        "familyName": family,
+        "styleName": "Regular" if weight < 700 else "Bold",
+        "fullName": family,
+        "psName": family.replace(" ", "") + ("-Bold" if weight >= 700 else "-Regular"),
+    })
+    builder.setupPost()
+    builder.setupMaxp()
+
+    if variable:
+        if cff:
+            raise ValueError("test fixture variable CFF is not supported")
+        builder.setupFvar([("wght", axis_min, 400, axis_max, "Weight")], [])
+        builder.setupGvar({name: [] for name in order})
+
+    builder.save(path)
+
+
+def make_collection(path: Path, first: Path, second: Path) -> None:
+    a = TTFont(first, lazy=False, recalcTimestamp=False)
+    b = TTFont(second, lazy=False, recalcTimestamp=False)
+    collection = TTCollection()
+    collection.fonts = [a, b]
+    try:
+        collection.save(path)
+    finally:
+        a.close()
+        b.close()
+
+
+def slot_from_stock(
+    logical: str,
+    stock: Path,
+    *,
+    family: str,
+    source_xml: str | None,
+    declared: str,
+    face_index: int = 0,
+    weight: int = 400,
+    postscript: str = "",
+) -> dict:
+    fmt, metrics = font_inventory._read_metrics(stock, face_index)
+    refs = []
+    if source_xml:
+        refs.append({
+            "sourceXml": source_xml,
+            "sourcePartition": Path(source_xml).parts[1],
+            "family": family,
+            "familyNormalized": family.lower(),
+            "familyAttributes": {},
+            "declared": declared,
+            "postScriptName": postscript,
+            "weight": weight,
+            "style": "normal",
+            "index": face_index,
+            "axes": "",
+            "resolvedPath": logical,
+        })
+    return {
+        "slotName": Path(logical).name,
+        "path": logical,
+        "partition": Path(logical).parts[1],
+        "source": "phase6-test",
+        "families": [family],
+        "weight": weight,
+        "style": "normal",
+        "faceIndex": face_index,
+        "format": fmt,
+        "metrics": metrics,
+        "xmlRefs": refs,
+        "legacyReplaceable": True,
+        "runtimeEvidence": {"fontManager": True, "mount": False},
+    }
+
+
+def role_map(role_name: str, action: str = "conditional") -> dict:
+    return {
+        "role": role_name,
+        "confidence": 100,
+        "action": action,
+        "reasons": ["phase6-test"],
+        "evidence": {},
+        "comparison": "agree",
+    }
+
+
+def build_plans(
+    source: Path,
+    slot: dict,
+    role_name: str,
+    xml_path: Path | None,
+) -> tuple[dict, dict]:
+    source_profile = font_source_profile.build([source])
+    topology = {
+        "schema": "device-font-topology-v1",
+        "topologyRevision": 2,
+        "state": "ready",
+        "buildKey": "phase6-test",
+        "romKind": "generic",
+        "summary": {
+            "slotCount": 1,
+            "dataFontFileCount": 0,
+            "dataFontConfigReferenceCount": 0,
+            "unresolvedXmlRefCount": 0,
+        },
+        "slots": {slot["path"]: slot},
+        "families": {},
+        "xmlAliases": [],
+        "unresolvedXmlRefs": [],
+        "runtime": {},
+    }
+    roles = {
+        "schema": "device-font-roles-v1",
+        "roleRevision": 1,
+        "state": "ready",
+        "buildKey": "phase6-test",
+        "romKind": "generic",
+        "slots": {slot["path"]: role_map(
+            role_name,
+            "specialized" if role_name in {"clock", "numeric"} else "conditional",
+        )},
+    }
+    font_plan = universal_font_plan.build_plan(topology, roles, source_profile)
+    universal_font_plan.validate_plan(font_plan)
+    xml_map = {}
+    if xml_path is not None:
+        source_xml = slot["xmlRefs"][0]["sourceXml"]
+        xml_map[source_xml] = xml_path
+    route_plan = minimal_xml_router.build_route_plan(font_plan, xml_map, None, False)
+    minimal_xml_router.validate_route_plan(route_plan, font_plan)
+    return font_plan, route_plan
+
+
+def artifact_by_kind(manifest: dict, kind: str) -> dict:
+    for item in manifest["artifacts"]:
+        if kind in item["deploymentKinds"]:
+            return item
+    raise AssertionError(f"missing artifact kind {kind}: {manifest['artifacts']}")
+
+
+def assert_ready(manifest: dict) -> None:
+    assert manifest["schema"] == "universal-font-artifacts-v1"
+    assert manifest["mutatesSystem"] is False
+    assert manifest["summary"]["blockedCount"] == 0, manifest
+    assert manifest["summary"]["readyCount"] == manifest["summary"]["artifactCount"], manifest
+    assert manifest["summary"]["deploymentReady"] is True, manifest
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory(prefix="luoshu-phase6-") as raw:
+        temp = Path(raw)
+
+        # 1) Static TTF, source-as-base, both XML and physical artifacts.
+        source = temp / "User-Regular.ttf"
+        stock = temp / "Stock-Regular.ttf"
+        make_font(source, family="User Font", y_min=-80, y_max=700)
+        make_font(stock, family="Stock Font", y_min=-100, y_max=720)
+        xml = temp / "fonts.xml"
+        xml.write_text(
+            '<familyset><family name="sans-serif">'
+            '<font weight="400">Stock-Regular.ttf</font>'
+            '</family></familyset>',
+            encoding="utf-8",
+        )
+        logical = "/system/fonts/Stock-Regular.ttf"
+        slot = slot_from_stock(
+            logical, stock, family="sans-serif",
+            source_xml="/system/etc/fonts.xml", declared="Stock-Regular.ttf",
+        )
+        font_plan, route_plan = build_plans(source, slot, "latin", xml)
+        manifest = compiler.compile_all(
+            font_plan,
+            route_plan,
+            {logical: stock},
+            temp / "out-static",
+            False,
+        )
+        assert_ready(manifest)
+        xml_artifact = artifact_by_kind(manifest, "xml-route")
+        assert xml_artifact["mode"] == "source-as-base", xml_artifact
+        with TTFont(xml_artifact["output"]) as built:
+            assert built["head"].unitsPerEm == 1000
+            assert built["hhea"].ascent == 900
+            assert built["hhea"].descent == -220
+
+        # 2) Specialized clock: target digit advances must remain byte-exact.
+        clock_source = temp / "User-Clock.ttf"
+        clock_stock = temp / "AndroidClock.ttf"
+        make_font(clock_source, family="User Clock", advance=620, y_min=-70, y_max=650)
+        make_font(clock_stock, family="Android Clock", advance=760, y_min=-90, y_max=690)
+        clock_xml = temp / "clock.xml"
+        clock_xml.write_text(
+            '<familyset><family name="clock-ui">'
+            '<font weight="400">AndroidClock.ttf</font>'
+            '</family></familyset>',
+            encoding="utf-8",
+        )
+        clock_logical = "/system/fonts/AndroidClock.ttf"
+        clock_slot = slot_from_stock(
+            clock_logical, clock_stock, family="clock-ui",
+            source_xml="/system/etc/clock.xml", declared="AndroidClock.ttf",
+        )
+        clock_plan, clock_route = build_plans(clock_source, clock_slot, "clock", clock_xml)
+        clock_manifest = compiler.compile_all(
+            clock_plan,
+            clock_route,
+            {clock_logical: clock_stock},
+            temp / "out-clock",
+            False,
+        )
+        assert_ready(clock_manifest)
+        clock_artifact = artifact_by_kind(clock_manifest, "xml-route")
+        assert clock_artifact["mode"] == "stock-shell"
+        with TTFont(clock_stock) as before, TTFont(clock_artifact["output"]) as after:
+            before_cmap = before.getBestCmap()
+            after_cmap = after.getBestCmap()
+            for cp in map(ord, "0123456789"):
+                assert after["hmtx"].metrics[after_cmap[cp]][0] == before["hmtx"].metrics[before_cmap[cp]][0]
+
+        # 3) CFF/OTF static general UI path must compile without pretending it is glyf.
+        cff_source = temp / "UserCFF.otf"
+        cff_stock = temp / "StockCFF.otf"
+        make_font(cff_source, family="User CFF", cff=True, y_min=-80, y_max=710)
+        make_font(cff_stock, family="Stock CFF", cff=True, y_min=-100, y_max=730)
+        cff_xml = temp / "cff.xml"
+        cff_xml.write_text(
+            '<familyset><family name="sans-serif">'
+            '<font weight="400">StockCFF.otf</font>'
+            '</family></familyset>',
+            encoding="utf-8",
+        )
+        cff_logical = "/product/fonts/StockCFF.otf"
+        cff_slot = slot_from_stock(
+            cff_logical, cff_stock, family="sans-serif",
+            source_xml="/product/etc/fonts.xml", declared="StockCFF.otf",
+        )
+        cff_plan, cff_route = build_plans(cff_source, cff_slot, "latin", cff_xml)
+        cff_manifest = compiler.compile_all(
+            cff_plan, cff_route, {cff_logical: cff_stock}, temp / "out-cff", False
+        )
+        assert_ready(cff_manifest)
+        cff_artifact = artifact_by_kind(cff_manifest, "xml-route")
+        assert cff_artifact["mode"] == "source-as-base"
+        with TTFont(cff_artifact["output"]) as built:
+            assert "CFF " in built
+            assert "glyf" not in built
+
+        # 4) TTC face contract: face 0 survives while face 1 is the compiled clock face.
+        face0 = temp / "Face0.ttf"
+        face1 = temp / "Face1.ttf"
+        collection = temp / "ClockCollection.ttc"
+        make_font(face0, family="Untouched Face", advance=500)
+        make_font(face1, family="Clock Face", advance=760, y_min=-100, y_max=700)
+        make_collection(collection, face0, face1)
+        ttc_xml = temp / "ttc.xml"
+        ttc_xml.write_text(
+            '<familyset><family name="clock-ui">'
+            '<font weight="400" index="1">ClockCollection.ttc</font>'
+            '</family></familyset>',
+            encoding="utf-8",
+        )
+        ttc_logical = "/system/fonts/ClockCollection.ttc"
+        ttc_slot = slot_from_stock(
+            ttc_logical, collection, family="clock-ui",
+            source_xml="/system/etc/ttc.xml", declared="ClockCollection.ttc",
+            face_index=1,
+        )
+        ttc_plan, ttc_route = build_plans(clock_source, ttc_slot, "clock", ttc_xml)
+        ttc_manifest = compiler.compile_all(
+            ttc_plan, ttc_route, {ttc_logical: collection}, temp / "out-ttc", False
+        )
+        assert_ready(ttc_manifest)
+        ttc_artifact = artifact_by_kind(ttc_manifest, "xml-route")
+        assert ttc_artifact["mode"] == "stock-shell"
+        compiled_collection = TTCollection(ttc_artifact["output"], lazy=False)
+        stock_collection = TTCollection(collection, lazy=False)
+        try:
+            assert len(compiled_collection.fonts) == 2
+            assert (
+                compiled_collection.fonts[0].getTableData("glyf")
+                == stock_collection.fonts[0].getTableData("glyf")
+            )
+            before = stock_collection.fonts[1]
+            after = compiled_collection.fonts[1]
+            before_cmap = before.getBestCmap()
+            after_cmap = after.getBestCmap()
+            for cp in map(ord, "0123456789"):
+                assert after["hmtx"].metrics[after_cmap[cp]][0] == before["hmtx"].metrics[before_cmap[cp]][0]
+        finally:
+            compiled_collection.close()
+            stock_collection.close()
+
+        # 5) Physical-only variable UI keeps fvar/gvar when axis ranges and geometry match.
+        variable_source = temp / "UserVF.ttf"
+        variable_stock = temp / "StockVF.ttf"
+        make_font(variable_source, family="User VF", variable=True, y_min=-100, y_max=720)
+        make_font(variable_stock, family="Stock VF", variable=True, y_min=-100, y_max=720)
+        vf_logical = "/system/fonts/StockVF.ttf"
+        vf_slot = slot_from_stock(
+            vf_logical, variable_stock, family="sans-serif",
+            source_xml=None, declared="StockVF.ttf",
+        )
+        vf_plan, vf_route = build_plans(variable_source, vf_slot, "latin", None)
+        vf_manifest = compiler.compile_all(
+            vf_plan, vf_route, {vf_logical: variable_stock}, temp / "out-vf", False
+        )
+        assert_ready(vf_manifest)
+        vf_artifact = artifact_by_kind(vf_manifest, "physical-slot")
+        assert vf_artifact["mode"] == "source-variable-preserve", vf_artifact
+        with TTFont(vf_artifact["output"]) as built:
+            assert "fvar" in built
+            assert "gvar" in built
+            assert built["hhea"].ascent == 900
+            assert built["hhea"].descent == -220
+
+        # 6) A narrower variable source axis range must block instead of staticizing.
+        narrow_source = temp / "NarrowVF.ttf"
+        make_font(
+            narrow_source, family="Narrow VF", variable=True,
+            axis_min=300, axis_max=700, y_min=-100, y_max=720,
+        )
+        narrow_plan, narrow_route = build_plans(narrow_source, vf_slot, "latin", None)
+        narrow_manifest = compiler.compile_all(
+            narrow_plan, narrow_route, {vf_logical: variable_stock}, temp / "out-narrow", False
+        )
+        assert narrow_manifest["summary"]["blockedCount"] == 1
+        assert narrow_manifest["summary"]["deploymentReady"] is False
+        blocked = narrow_manifest["artifacts"][0]
+        assert blocked["status"] == "blocked"
+        assert "不能覆盖目标" in blocked["reason"], blocked
+
+        # Manifest validation checks actual artifact hashes.
+        manifest_path = temp / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        compiler.validate_manifest(manifest, font_plan, route_plan)
+
+        tampered_manifest = json.loads(json.dumps(manifest))
+        tampered_manifest["artifacts"][0]["bytes"] += 1
+        try:
+            compiler.validate_manifest(tampered_manifest, font_plan, route_plan)
+        except compiler.CompilerError as error:
+            assert "manifestId" in str(error)
+        else:
+            raise AssertionError("tampered compiler manifest unexpectedly validated")
+
+        bad_map = json.loads(json.dumps(manifest))
+        first_id = next(iter(bad_map["artifactMap"]))
+        bad_map["artifactMap"][first_id] = "wrong.ttf"
+        try:
+            compiler.validate_manifest(bad_map, font_plan, route_plan)
+        except compiler.CompilerError as error:
+            assert "artifactMap" in str(error)
+        else:
+            raise AssertionError("tampered artifactMap unexpectedly validated")
+
+    print("universal_font_compiler_test: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

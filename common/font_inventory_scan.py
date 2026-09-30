@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import font_inventory as base
+import device_font_template as template
 from hyperos_physical_policy import (PARTITIONS as HYPEROS_PARTITIONS, stock_physical_font_name,
                                     DYNAMIC_OVERLAY_PATH, DYNAMIC_OVERLAY_TARGET)
 
-SCANNER_REVISION = 4
+SCANNER_REVISION = 5
 CANDIDATE_SCHEMA = "device-font-candidates-v1"
+XML_GRAPH_SCHEMA = "device-font-xml-graph-v1"
 METRICS_REVISION = 3
 # Re-scan trusted stock metrics for Latin UI families restored after v4.3.0.
 HYPEROS_COVERAGE_REVISION = 4
@@ -163,6 +165,87 @@ def _parse_partition_xml(
         _merge_families(families, local_families)
         _merge_slots(slots, local_slots, [str(logical_xml)])
     return families, slots
+
+def _parse_full_xml_graph(
+    xml_sources: list[tuple[str, Path, Path]],
+    font_roots: list[base.FontRoot],
+) -> dict[str, Any]:
+    """Capture every XML font reference without changing legacy UI-slot semantics."""
+    refs: list[dict[str, Any]] = []
+    aliases: list[dict[str, str]] = []
+    seen_refs: set[tuple[str, str, str, int, str, str]] = set()
+    seen_aliases: set[tuple[str, str, str]] = set()
+
+    for partition, logical_xml, actual_xml in xml_sources:
+        preferred = [root for root in font_roots if root.partition == partition]
+        ordered_roots = preferred + [root for root in font_roots if root.partition != partition]
+        try:
+            parsed_refs = template.parse_xml(actual_xml)
+        except (OSError, ET.ParseError):
+            parsed_refs = []
+
+        for ref in parsed_refs:
+            resolved_path = ""
+            if ref.declared:
+                resolved = base._resolve_file(ref.declared, ordered_roots)
+                if resolved is not None:
+                    resolved_root, resolved_actual = resolved
+                    resolved_path = base._logical_path(resolved_root, resolved_actual)
+            key = (
+                str(logical_xml),
+                template.normalize(ref.family),
+                ref.declared or ref.postscript_name,
+                int(ref.index),
+                str(ref.style),
+                str(ref.axes),
+            )
+            if key in seen_refs:
+                continue
+            seen_refs.add(key)
+            refs.append({
+                "sourceXml": str(logical_xml),
+                "sourcePartition": partition,
+                "family": ref.family,
+                "familyNormalized": template.normalize(ref.family),
+                "familyAttributes": dict(ref.family_attrs),
+                "declared": ref.declared,
+                "postScriptName": ref.postscript_name,
+                "weight": int(ref.weight),
+                "style": ref.style,
+                "index": int(ref.index),
+                "axes": ref.axes,
+                "resolvedPath": resolved_path,
+            })
+
+        try:
+            document = ET.parse(actual_xml)
+        except (OSError, ET.ParseError):
+            continue
+        for node in document.getroot().iter():
+            if base._local_name(node.tag) != "alias":
+                continue
+            name = (node.get("name") or "").strip()
+            target = (node.get("to") or "").strip()
+            if not name or not target:
+                continue
+            key = (str(logical_xml), name, target)
+            if key in seen_aliases:
+                continue
+            seen_aliases.add(key)
+            aliases.append({
+                "sourceXml": str(logical_xml),
+                "name": name,
+                "to": target,
+            })
+
+    return {
+        "schema": XML_GRAPH_SCHEMA,
+        "refCount": len(refs),
+        "aliasCount": len(aliases),
+        "refs": refs,
+        "aliases": aliases,
+    }
+
 
 def _count_xml_ui_faces(xml_sources: Iterable[tuple[str, Path, Path]]) -> int:
     faces: set[tuple[str, str, str, str]] = set()
@@ -625,6 +708,8 @@ def _can_reuse(existing: dict[str, Any], build_key: str) -> bool:
         and "stockFontUniqueFileCount" in summary
         and "themeOverrideRoots" in summary
         and isinstance(existing.get("discoveredPartitions"), list)
+        and isinstance(existing.get("xmlGraph"), dict)
+        and existing["xmlGraph"].get("schema") == XML_GRAPH_SCHEMA
     )
 
 
@@ -808,6 +893,7 @@ def _scan_current_roots(args: Any, build_key: str, fingerprint: str, display_id:
     base._is_ui_family = _is_ui_family
     replaceable_roots = [*primary_roots, *auxiliary_roots]
     families, slots = _parse_partition_xml(xml_sources, replaceable_roots)
+    xml_graph = _parse_full_xml_graph(xml_sources, replaceable_roots)
     base._add_heuristic_slots(slots, replaceable_roots, args.font_check)
     # Vendor-agnostic final pass: enumerate stock font files and classify real
     # text faces by cmap/metrics instead of waiting for a hard-coded OEM name.
@@ -881,6 +967,8 @@ def _scan_current_roots(args: Any, build_key: str, fingerprint: str, display_id:
         "fontSignatures": _rom_markers(names),
         "stockCountSemantics": "font paths from canonical-or-alias partition roots; theme fonts excluded",
         "installCandidatePathCount": int(probe.get("candidateCount", 0)),
+        "xmlGraphRefCount": int(xml_graph.get("refCount", 0)),
+        "xmlAliasCount": int(xml_graph.get("aliasCount", 0)),
     })
     inventory = {
         "schema": base.SCHEMA,
@@ -916,6 +1004,7 @@ def _scan_current_roots(args: Any, build_key: str, fingerprint: str, display_id:
             for partition, logical, actual in etc_roots if actual.is_dir()
         ],
         "xmlSources": [str(logical) for _partition, logical, _actual in xml_sources],
+        "xmlGraph": xml_graph,
         "families": {name: paths for name, paths in sorted(families.items()) if name and paths},
         "slots": {logical: slots[logical] for logical in sorted(slots)},
         "slotCount": len(slots),

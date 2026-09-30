@@ -138,7 +138,10 @@ universal_font_next_boot_activate() {
     _ufnb_retired_root="$_ufnb_mod/.luoshu-retired"
     _ufnb_retired="$_ufnb_retired_root/universal-${_ufnb_boot}"
     _ufnb_backup="$_ufnb_cfg/.universal-next-backup.$$"
-    mkdir -p "$_ufnb_retired_root" "$_ufnb_backup" 2>/dev/null || return 1
+    mkdir -p "$_ufnb_retired_root" "$_ufnb_backup" 2>/dev/null || {
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" activation-state-dir-failed "$_ufnb_previous_font"
+        return 1
+    }
     [ ! -f "$_ufnb_cfg/universal-font-runtime.conf" ] || cp -fp "$_ufnb_cfg/universal-font-runtime.conf" "$_ufnb_backup/runtime.conf" 2>/dev/null || true
     [ ! -f "$_ufnb_cfg/font_runtime_legacy_v14_4.conf" ] || cp -fp "$_ufnb_cfg/font_runtime_legacy_v14_4.conf" "$_ufnb_backup/legacy.conf" 2>/dev/null || true
     [ ! -f "$_ufnb_cfg/active_font.conf" ] || cp -fp "$_ufnb_cfg/active_font.conf" "$_ufnb_backup/active.conf" 2>/dev/null || true
@@ -146,14 +149,14 @@ universal_font_next_boot_activate() {
 
     if [ -d "$_ufnb_live" ]; then
         mv "$_ufnb_live" "$_ufnb_retired" 2>/dev/null || {
-            _ufnb_restore_previous_selection "$_ufnb_cfg" "$_ufnb_previous_font"
+            _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" retire-previous-payload-failed "$_ufnb_previous_font"
             rm -rf "$_ufnb_backup"
             return 1
         }
     fi
     if ! mv "$_ufnb_next" "$_ufnb_live" 2>/dev/null; then
         [ ! -d "$_ufnb_retired" ] || mv "$_ufnb_retired" "$_ufnb_live" 2>/dev/null || true
-        _ufnb_restore_previous_selection "$_ufnb_cfg" "$_ufnb_previous_font"
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" activate-next-payload-failed "$_ufnb_previous_font"
         rm -rf "$_ufnb_backup" 2>/dev/null || true
         return 1
     fi
@@ -173,15 +176,12 @@ universal_font_next_boot_activate() {
         [ ! -d "$_ufnb_retired" ] || mv "$_ufnb_retired" "$_ufnb_live" 2>/dev/null || true
         _ufnb_restore_file "$_ufnb_backup/runtime.conf" "$_ufnb_cfg/universal-font-runtime.conf"
         _ufnb_restore_file "$_ufnb_backup/legacy.conf" "$_ufnb_cfg/font_runtime_legacy_v14_4.conf"
-        _ufnb_restore_previous_selection "$_ufnb_cfg" "$_ufnb_previous_font"
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" runtime-state-commit-failed "$_ufnb_previous_font"
         rm -rf "$_ufnb_backup" 2>/dev/null || true
         return 1
     }
     chmod 0600 "$_ufnb_runtime" 2>/dev/null || true
 
-    rm -f "$_ufnb_cfg/font_runtime_legacy_v14_4.conf" "$_ufnb_cfg/font-payload-schema.conf" 2>/dev/null || true
-    printf '%s\n' "$_ufnb_font" > "$_ufnb_cfg/active_font.conf" 2>/dev/null || true
-    chmod 0644 "$_ufnb_cfg/active_font.conf" 2>/dev/null || true
     {
         printf 'font=%s\n' "$_ufnb_font"
         printf 'deploymentId=%s\n' "$_ufnb_id"
@@ -194,8 +194,23 @@ universal_font_next_boot_activate() {
         printf 'bootId=%s\n' "$_ufnb_boot"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
     } > "$_ufnb_cfg/universal-font-activated.conf.tmp.$$" 2>/dev/null && \
-        mv -f "$_ufnb_cfg/universal-font-activated.conf.tmp.$$" "$_ufnb_cfg/universal-font-activated.conf" 2>/dev/null || true
+        mv -f "$_ufnb_cfg/universal-font-activated.conf.tmp.$$" "$_ufnb_cfg/universal-font-activated.conf" 2>/dev/null || {
+            rm -rf "$_ufnb_live" 2>/dev/null || true
+            [ ! -d "$_ufnb_retired" ] || mv "$_ufnb_retired" "$_ufnb_live" 2>/dev/null || true
+            _ufnb_restore_file "$_ufnb_backup/runtime.conf" "$_ufnb_cfg/universal-font-runtime.conf"
+            _ufnb_restore_file "$_ufnb_backup/legacy.conf" "$_ufnb_cfg/font_runtime_legacy_v14_4.conf"
+            _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" activation-metadata-commit-failed "$_ufnb_previous_font"
+            rm -f "$_ufnb_cfg/universal-font-activated.conf.tmp.$$" 2>/dev/null || true
+            rm -rf "$_ufnb_backup" 2>/dev/null || true
+            return 1
+        }
     chmod 0644 "$_ufnb_cfg/universal-font-activated.conf" 2>/dev/null || true
+
+    # Only after both runtime state and recovery metadata are committed do we
+    # retire the previous engine mode for this boot.
+    rm -f "$_ufnb_cfg/font_runtime_legacy_v14_4.conf" "$_ufnb_cfg/font-payload-schema.conf" 2>/dev/null || true
+    printf '%s\n' "$_ufnb_font" > "$_ufnb_cfg/active_font.conf" 2>/dev/null || true
+    chmod 0644 "$_ufnb_cfg/active_font.conf" 2>/dev/null || true
 
     rm -f "$_ufnb_state" "$_ufnb_cfg/font-payload-next.conf" \
           "$_ufnb_cfg/text_reboot_required.conf" \

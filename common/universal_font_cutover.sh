@@ -222,6 +222,19 @@ _uc_copy_retired_to_next() {
     return 0
 }
 
+_uc_prepare_empty_next() {
+    _uce_stage="$MODDIR/.luoshu-payload-next.default.$$"
+    _uce_next="$MODDIR/.luoshu-payload-next"
+    rm -rf "$_uce_stage" 2>/dev/null || true
+    mkdir -p "$_uce_stage" 2>/dev/null || return 1
+    rm -rf "$_uce_next" 2>/dev/null || true
+    mv "$_uce_stage" "$_uce_next" 2>/dev/null || {
+        rm -rf "$_uce_stage" 2>/dev/null || true
+        return 1
+    }
+    return 0
+}
+
 _uc_schedule_rollback() {
     _ucr_boot="${1:-}"
     [ -s "$VERIFY_CONF" ] || return 2
@@ -250,19 +263,6 @@ _uc_schedule_rollback() {
         return 2
     fi
 
-    _ucr_retired=$(_uc_value "$ACTIVATED_CONF" retired)
-    case "$_ucr_retired" in
-        "$MODDIR"/.luoshu-retired/universal-*) ;;
-        *)
-            _uc_write_rollback_state failed '' '' retired-path-untrusted "$_ucr_retired"
-            return 1
-            ;;
-    esac
-    [ -d "$_ucr_retired" ] || {
-        _uc_write_rollback_state failed '' '' retired-payload-missing "$_ucr_retired"
-        return 1
-    }
-
     _ucr_previous_font=$(_uc_value "$ACTIVATED_CONF" previousFont)
     _ucr_previous_mode=$(_uc_value "$ACTIVATED_CONF" previousMode)
     _ucr_previous_legacy=$(_uc_value "$ACTIVATED_CONF" previousLegacy)
@@ -274,6 +274,34 @@ _uc_schedule_rollback() {
         else _ucr_previous_mode=classic
         fi
     }
+    if [ "$_ucr_previous_font" = default ]; then
+        _ucr_previous_mode=default
+        _ucr_previous_legacy=false
+    fi
+
+    _ucr_retired=$(_uc_value "$ACTIVATED_CONF" retired)
+    if [ "$_ucr_previous_mode" = default ]; then
+        # System default has no previous LuoShu payload by design. Stage an
+        # empty next payload so next_boot_payload can retire the failed
+        # Universal payload and return to pure ROM font routing.
+        _uc_prepare_empty_next || {
+            _uc_write_rollback_state failed default default default-payload-stage-failed ''
+            return 1
+        }
+        _ucr_retired=''
+    else
+        case "$_ucr_retired" in
+            "$MODDIR"/.luoshu-retired/universal-*) ;;
+            *)
+                _uc_write_rollback_state failed "$_ucr_previous_font" "$_ucr_previous_mode" retired-path-untrusted "$_ucr_retired"
+                return 1
+                ;;
+        esac
+        [ -d "$_ucr_retired" ] || {
+            _uc_write_rollback_state failed "$_ucr_previous_font" "$_ucr_previous_mode" retired-payload-missing "$_ucr_retired"
+            return 1
+        }
+    fi
 
     if [ "$_ucr_previous_mode" = universal ]; then
         _ucr_manifest="$_ucr_retired/.luoshu-runtime/deployment/deployment.json"
@@ -310,7 +338,9 @@ _uc_schedule_rollback() {
             }
         chmod 0600 "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || true
     else
-        _uc_copy_retired_to_next "$_ucr_retired" || return 1
+        if [ "$_ucr_previous_mode" != default ]; then
+            _uc_copy_retired_to_next "$_ucr_retired" || return 1
+        fi
         rm -f "$CONFIG_DIR/universal-font-next.conf" 2>/dev/null || true
         {
             printf 'state=prepared\n'

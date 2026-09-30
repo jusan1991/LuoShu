@@ -208,13 +208,22 @@ status_json() {
         _verification_state=pending
         _verification_mode=unknown
         _verification_reason=stale-verification
-    elif [ "$_verification_state" = failed ] || [ "$_mount_state" = failed ]; then
-        # The atomic self-mount transaction rolls every LuoShu layer back on
-        # failure, so the only safe effective-font claim is the ROM default.
+    elif [ "$_mount_state" = failed ]; then
+        # A failed atomic mount transaction is rolled back before Android consumes
+        # the payload, so the ROM default is the only safe effective-font claim.
         _effective_active=default
         _font_effect_state=failed
-        if [ "$_mount_state" = failed ]; then
-            _verification_reason=self-mount-failed
+        _verification_reason=self-mount-failed
+    elif [ "$_verification_state" = failed ]; then
+        _font_effect_state=failed
+        if [ -s "$_universal_runtime" ]; then
+            # Runtime verification can fail on coverage/axis/geometry while the
+            # Universal payload is still visible in this boot. Never claim that
+            # the system default is already active unless the mount transaction
+            # itself rolled back.
+            _effective_active=unknown
+        else
+            _effective_active=default
         fi
     elif [ "$_verification_state" = verified ]; then
         case "$_verification_mode" in

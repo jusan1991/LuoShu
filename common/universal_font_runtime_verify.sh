@@ -12,6 +12,7 @@ COMPILER_BRIDGE="$MODDIR/common/universal_font_compiler.sh"
 RUNTIME_CONF="$CONFIG_DIR/universal-font-runtime.conf"
 MOUNT_STATE="$CONFIG_DIR/universal-font-mount.conf"
 ACTIVATED_CONF="$CONFIG_DIR/universal-font-activated.conf"
+CUTOVER_CONTROLLER="$MODDIR/common/universal_font_cutover.sh"
 OUTPUT_JSON="$CONFIG_DIR/universal-font-runtime-verification.json"
 OUTPUT_CONF="$CONFIG_DIR/universal-font-runtime-verification.conf"
 LIVE_DEPLOYMENT="$MODDIR/.luoshu-payload/.luoshu-runtime/deployment/deployment.json"
@@ -140,6 +141,8 @@ _uvr_terminal_failure() {
     } > "$OUTPUT_CONF.tmp.$$" 2>/dev/null && mv -f "$OUTPUT_CONF.tmp.$$" "$OUTPUT_CONF" 2>/dev/null || true
     chmod 0644 "$OUTPUT_CONF" 2>/dev/null || true
     _uvr_log "FAIL reason=$_uvr_reason font=$_uvr_font"
+    [ -f "$CUTOVER_CONTROLLER" ] && MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
+        sh "$CUTOVER_CONTROLLER" rollback-from-fail "$_uvr_boot" >> "$LOG_FILE" 2>&1 || true
 }
 
 _uvr_cleanup_retired_on_pass() {
@@ -212,7 +215,12 @@ _uvr_run() {
     _uvr_reason=$(_uvr_value "$OUTPUT_CONF" reason)
     _uvr_log "result=${_uvr_grade:-FAIL} reason=${_uvr_reason:-unknown} font=$_uvr_font rc=$_uvr_rc"
 
-    [ "$_uvr_grade" = PASS ] && _uvr_cleanup_retired_on_pass
+    if [ "$_uvr_grade" = PASS ]; then
+        _uvr_cleanup_retired_on_pass
+    elif [ "$_uvr_grade" = FAIL ] && [ -f "$CUTOVER_CONTROLLER" ]; then
+        MODDIR="$MODDIR" MODULE_DIR="$MODDIR" \
+            sh "$CUTOVER_CONTROLLER" rollback-from-fail "$_uvr_boot" >> "$LOG_FILE" 2>&1 || true
+    fi
     rm -f "$PID_FILE" 2>/dev/null || true
     return "$_uvr_rc"
 }

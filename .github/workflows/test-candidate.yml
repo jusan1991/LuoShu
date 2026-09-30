@@ -148,7 +148,27 @@ jobs:
             common/font_switch_task.sh \
             common/legacy_v14_4/payload_clone.sh \
             common/mix_weight_mode.sh \
-            common/mount_fast_sync.sh; do
+            common/mount_fast_sync.sh \
+            common/font_topology_snapshot.py \
+            common/font_topology_snapshot.sh \
+            common/font_role_shadow.py \
+            common/font_role_shadow.sh \
+            common/font_source_profile.py \
+            common/font_source_profile.sh \
+            common/universal_font_plan.py \
+            common/universal_font_plan.sh \
+            common/minimal_xml_router.py \
+            common/minimal_xml_router.sh \
+            common/universal_font_compiler.py \
+            common/universal_font_compiler.sh \
+            common/universal_font_deployment.py \
+            common/universal_font_deployment.sh \
+            common/universal_mount_runtime.sh \
+            common/universal_next_boot.sh \
+            common/universal_font_runtime_verify.py \
+            common/universal_font_runtime_verify.sh \
+            common/universal_font_cutover_gate.py \
+            common/universal_font_cutover.sh; do
             grep -qx "$path" /tmp/luoshu-candidate-files.txt
           done
           unzip -p "$module" common/background_task.sh | grep -q '_lsd_task'
@@ -170,7 +190,13 @@ jobs:
           unzip -p "$module" common/font_inventory_scan.py | grep -q 'themeOverrideRoots'
           unzip -p "$module" common/mix_weight_mode.sh | grep -q '快速单文件组合'
           unzip -p "$module" .luoshu-runtime/compat/v227/customize.sh | grep -q '原厂字体文件'
-          unzip -p "$module" .luoshu-runtime/compat/v227/customize.sh | grep -q 'XML .* 通用探测 .* OEM 规则'
+          # Verify the real install-time discovery chain, not an old comment string.
+          unzip -p "$module" .luoshu-runtime/compat/v227/customize.sh | grep -q 'stock_inventory_scan.py'
+          unzip -p "$module" .luoshu-runtime/compat/v227/customize.sh | grep -q 'font_topology_snapshot.sh'
+          unzip -p "$module" common/font_manager.sh | grep -q 'universal_font_cutover.sh'
+          unzip -p "$module" common/universal_font_cutover.sh | grep -q 'universal_font_cutover_gate.py'
+          unzip -p "$module" post-fs-data.sh | grep -q 'universal_font_next_boot_activate'
+          unzip -p "$module" service.sh | grep -q 'universal_font_runtime_verify.sh'
           unzip -p "$module" common/font_switch_task.sh | grep -q 'TIMEOUT_SECONDS'
           unzip -p "$module" common/font_switch_task.sh | grep -q '当前启动字体未被改动'
           unzip -p "$module" common/mount_fast_sync.sh | grep -q 'cp -al'
@@ -178,7 +204,18 @@ jobs:
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           unzip -q "$module" -d "$tmp"
-          python3 -m py_compile "$tmp/common/font_inventory.py" "$tmp/common/font_inventory_scan.py"
+          python3 -m py_compile \
+            "$tmp/common/font_inventory.py" \
+            "$tmp/common/font_inventory_scan.py" \
+            "$tmp/common/font_topology_snapshot.py" \
+            "$tmp/common/font_role_shadow.py" \
+            "$tmp/common/font_source_profile.py" \
+            "$tmp/common/universal_font_plan.py" \
+            "$tmp/common/minimal_xml_router.py" \
+            "$tmp/common/universal_font_compiler.py" \
+            "$tmp/common/universal_font_deployment.py" \
+            "$tmp/common/universal_font_runtime_verify.py" \
+            "$tmp/common/universal_font_cutover_gate.py"
           sh -n "$tmp/customize.sh"
           sh -n "$tmp/common/background_task.sh"
           sh -n "$tmp/common/device_font_template.sh"
@@ -189,6 +226,17 @@ jobs:
           sh -n "$tmp/common/font_switch_task.sh"
           sh -n "$tmp/common/mix_weight_mode.sh"
           sh -n "$tmp/common/mount_fast_sync.sh"
+          sh -n "$tmp/common/font_topology_snapshot.sh"
+          sh -n "$tmp/common/font_role_shadow.sh"
+          sh -n "$tmp/common/font_source_profile.sh"
+          sh -n "$tmp/common/universal_font_plan.sh"
+          sh -n "$tmp/common/minimal_xml_router.sh"
+          sh -n "$tmp/common/universal_font_compiler.sh"
+          sh -n "$tmp/common/universal_font_deployment.sh"
+          sh -n "$tmp/common/universal_mount_runtime.sh"
+          sh -n "$tmp/common/universal_next_boot.sh"
+          sh -n "$tmp/common/universal_font_runtime_verify.sh"
+          sh -n "$tmp/common/universal_font_cutover.sh"
           sh -n "$tmp/service.sh"
           sh -n scripts/pre_release_readiness.sh
 

@@ -93,4 +93,12 @@ assert data["rollbackTargetFont"] == "OldFont", data
 assert data["rollbackTargetMode"] == "legacy", data
 ' 
 
+
+# A Universal verification failure without a staged rollback must remain unknown,
+# never masquerade as an already-restored system default.
+rm -f "$CONFIG/universal-font-rollback.conf" "$CONFIG/text_reboot_required.conf"
+printf 'grade=FAIL\nstate=fail\nmode=universal-runtime\nreason=required-axis-missing\nactiveFont=UniversalFont\n' \
+    >"$CONFIG/universal-font-runtime-verification.conf"
+assert_status unknown failed required-axis-missing
+
 printf 'LuoShu App bridge distinguishes configured, effective and rollback fonts.\n'

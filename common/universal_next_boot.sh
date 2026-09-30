@@ -65,7 +65,7 @@ _ufnb_discard_invalid_next() {
         printf 'reason=%s\n' "$_ufnb_reason"
         printf 'previousFont=%s\n' "${_ufnb_previous:-default}"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$_ufnb_failed.tmp.$" 2>/dev/null && mv -f "$_ufnb_failed.tmp.$" "$_ufnb_failed" 2>/dev/null || true
+    } > "$_ufnb_failed.tmp.$$" 2>/dev/null && mv -f "$_ufnb_failed.tmp.$$" "$_ufnb_failed" 2>/dev/null || true
     _ufnb_restore_previous_selection "${_ufnb_state%/universal-font-next.conf}" "$_ufnb_previous"
     rm -f "$_ufnb_state" 2>/dev/null || true
     rm -rf "$_ufnb_next" 2>/dev/null || true

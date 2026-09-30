@@ -39,13 +39,19 @@ case "$1" in
   manifest|path) printf '%s\n' "$MODDIR/config/deployment.json" ;;
   payload) printf '%s\n' "$MODDIR/config/prepared-payload" ;;
   stage-prepared)
+    previous=$(head -n1 "$MODDIR/config/active_font.conf" 2>/dev/null || printf 'default')
+    [ -n "$previous" ] || previous=default
     mkdir -p "$MODDIR/.luoshu-payload-next"
     {
       printf 'state=prepared\n'
       printf 'font=%s\n' "$2"
       printf 'deploymentId=fake-new\n'
       printf 'payloadDigest=fake-digest\n'
+      printf 'previousFont=%s\n' "$previous"
+      printf 'previousMode=classic\n'
+      printf 'previousLegacy=false\n'
     } > "$MODDIR/config/universal-font-next.conf"
+    printf '%s\n' "$2" > "$MODDIR/config/active_font.conf"
     printf '{"status":"ok","state":"staged-next-boot","pipeline":"universal","fallback":false,"deploymentId":"fake-new"}\n'
     ;;
   *) exit 2 ;;
@@ -53,14 +59,17 @@ esac
 SH
 cat > "$MOD/common/legacy_v14_4/font_switch_safe.sh" <<'SH'
 #!/bin/sh
+previous=$(head -n1 "$MODDIR/config/active_font.conf" 2>/dev/null || printf 'default')
+[ -n "$previous" ] || previous=default
 printf '%s\n' "${3:-unknown}" >> "$MODDIR/config/legacy-called"
 mkdir -p "$MODDIR/.luoshu-payload-next"
 {
   printf 'state=prepared\n'
   printf 'font=%s\n' "${3:-default}"
-  printf 'previousFont=OldFont\n'
-  printf 'previousLegacy=true\n'
+  printf 'previousFont=%s\n' "$previous"
+  printf 'previousLegacy=false\n'
 } > "$MODDIR/config/font-payload-next.conf"
+printf '%s\n' "${3:-default}" > "$MODDIR/config/active_font.conf"
 printf '{"status":"ok","state":"prepared","fallback":true}\n'
 SH
 cat > "$MOD/common/universal_font_cutover_gate.py" <<'PY'
@@ -106,14 +115,17 @@ printf '%s' "$OUT" | grep -q '"pipeline":"universal"'
 grep -q '^state=staged$' "$MOD/config/universal-font-cutover.conf"
 grep -q '^font=DemoFont$' "$MOD/config/universal-font-next.conf"
 
-rm -rf "$MOD/.luoshu-payload-next"
-rm -f "$MOD/config/universal-font-next.conf" "$MOD/config/font-payload-next.conf" "$MOD/config/legacy-called"
+# Superseding a queued Universal request with a legacy fallback must preserve
+# the font actually running in this boot as the legacy rollback source.
+rm -f "$MOD/config/font-payload-next.conf" "$MOD/config/legacy-called"
 MODDIR="$MOD" MODULE_DIR="$MOD" LUOSHU_PYTHON="$TMP/fake-python" FAKE_GATE=reject \
   sh "$ROOT/common/universal_font_cutover.sh" switch RejectedFont >/dev/null
 grep -q '^RejectedFont$' "$MOD/config/legacy-called"
 grep -q '^state=fallback$' "$MOD/config/universal-font-cutover.conf"
 [ ! -f "$MOD/config/universal-font-next.conf" ]
 [ -s "$MOD/config/font-payload-next.conf" ]
+grep -q '^previousFont=OldFont$' "$MOD/config/font-payload-next.conf"
+grep -q '^RejectedFont$' "$MOD/config/active_font.conf"
 
 rm -rf "$MOD/.luoshu-payload-next"
 rm -f "$MOD/config/font-payload-next.conf" "$MOD/config/legacy-called"

@@ -129,6 +129,7 @@ luoshu_next_boot_activate() {
           "$_lnba_module/config/universal-font-mount.conf" \
           "$_lnba_module/config/universal-font-next.conf" \
           "$_lnba_module/config/universal-font-activated.conf" \
+          "$_lnba_module/config/universal-font-rollback.conf" \
           "$_lnba_module/config/text_reboot_required.conf" 2>/dev/null || true
     {
 

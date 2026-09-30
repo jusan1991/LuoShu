@@ -283,6 +283,43 @@ Shadow 动作：
 
 最终给用户 PASS / WARN / FAIL，而不是让用户盲测。
 
+### Phase 9 — Controlled Production Cutover
+状态：**进行中 / universal-font-production-cutover-v1**
+
+目标：
+
+让 App 正式“换字体”入口开始优先使用 Phase 1–8 的 Universal Font Engine，同时保留旧物理字体引擎作为 fail-safe fallback，禁止一次性删除生产退路。
+
+生产切换顺序：
+
+1. 正式入口先进入统一 Cutover Controller，不再直接调用旧 `font_switch_safe.sh`
+2. `default`、复合字体临时 family、Universal 前置条件缺失时继续走旧引擎
+3. 普通单字体优先执行 Universal prepare → readiness gate → stage-next
+4. Universal prepare / route / compile / deployment / gate 任一步失败时，清理未提交的新引擎 next payload，并在同一任务中回退旧引擎
+5. Universal 成功只写 next-boot payload；当前 Android boot 的 live payload 永远不原地改写
+6. 重启后由 Phase 8 自动验证；PASS 才释放 retired payload，WARN 保留回滚材料
+7. FAIL 不允许继续宣称字体已生效，必须安全准备上一生产 payload 的 next-boot rollback；禁止当前 boot 强拆挂载、禁止自动重启、禁止回滚循环
+8. 旧 HyperOS / ColorOS / Generic 路由在 Cutover 稳定前继续保留，只能作为 fallback，不再作为新入口的第一选择
+
+Cutover readiness gate 必须至少满足：
+
+- FontPlan / RoutePlan / Artifact Manifest / Deployment 身份链一致
+- FontPlan 不存在 `blocked` replacement target
+- `missingRoleSlotCount=0`
+- 自动替换角色只允许 `ui-sans / cjk / latin / numeric / clock`
+- Emoji / Symbol / Serif / Monospace / unknown-protected 继续保持 preserve/review
+- RoutePlan `routingComplete=true`
+- Artifact Manifest `blockedCount=0` 且 `deploymentReady=true`
+- Deployment `activationReady=true`
+- Phase 7 payload 完整性校验通过后才允许写入 `.luoshu-payload-next`
+
+生产回退要求：
+
+- Universal 前置构建失败：同一次前台任务直接回退旧引擎，不要求用户重新点一次
+- Universal 已重启但 Phase 8 FAIL：只准备上一生产 payload 供下次完整重启恢复，不在当前 boot 改写 live payload
+- rollback 自身如果再次验证失败，只报告 FAIL 并保留诊断材料，禁止在两个 payload 之间无限来回
+- legacy/default payload 重新接管时必须清除 Universal runtime 状态，避免旧 payload 被 Universal Mount Backend 错误解释
+
 ## 当前迁移策略
 
 旧的 HyperOS / ColorOS / Generic 路由暂时保留，只作为“当前生产实现”。

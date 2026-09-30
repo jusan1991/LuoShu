@@ -92,6 +92,33 @@ STAGED=$(sh "$MOD/common/universal_font_deployment.sh" stage-next DemoFamily)
 printf "%s\n" "$STAGED" | grep -q '"state":"staged-next-boot"'
 test -d "$MOD/.luoshu-payload-next"
 test -s "$MOD/config/universal-font-next.conf"
+test "$(cat "$MOD/config/active_font.conf")" = DemoFamily
+grep -q '^font=DemoFamily
+MODDIR="$MOD" MODULE_DIR="$MOD" sh -c '. "$1"; universal_font_next_boot_activate' sh "$MOD/common/universal_next_boot.sh"
+test -d "$MOD/.luoshu-payload"
+test ! -e "$MOD/.luoshu-payload-next"
+test -s "$MOD/config/universal-font-runtime.conf"
+grep -q '^pipeline=universal-font-deployment-v1$' "$MOD/config/universal-font-runtime.conf"
+grep -q '^deploymentId=sha256:test-deployment$' "$MOD/config/universal-font-runtime.conf"
+test "$(cat "$MOD/config/active_font.conf")" = DemoFamily
+test ! -e "$MOD/config/font_runtime_legacy_v14_4.conf"
+
+echo "PHASE7_BRIDGE assertions-ok"
+echo "universal_font_deployment_bridge_test: PASS"
+ "$MOD/config/text_reboot_required.conf"
+grep -q '^reason=universal-next-boot-prepared
+MODDIR="$MOD" MODULE_DIR="$MOD" sh -c '. "$1"; universal_font_next_boot_activate' sh "$MOD/common/universal_next_boot.sh"
+test -d "$MOD/.luoshu-payload"
+test ! -e "$MOD/.luoshu-payload-next"
+test -s "$MOD/config/universal-font-runtime.conf"
+grep -q '^pipeline=universal-font-deployment-v1$' "$MOD/config/universal-font-runtime.conf"
+grep -q '^deploymentId=sha256:test-deployment$' "$MOD/config/universal-font-runtime.conf"
+test "$(cat "$MOD/config/active_font.conf")" = DemoFamily
+test ! -e "$MOD/config/font_runtime_legacy_v14_4.conf"
+
+echo "PHASE7_BRIDGE assertions-ok"
+echo "universal_font_deployment_bridge_test: PASS"
+ "$MOD/config/text_reboot_required.conf"
 
 echo "PHASE7_BRIDGE activate"
 MODDIR="$MOD" MODULE_DIR="$MOD" sh -c '. "$1"; universal_font_next_boot_activate' sh "$MOD/common/universal_next_boot.sh"

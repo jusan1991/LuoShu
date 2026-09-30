@@ -89,6 +89,20 @@ _uc_legacy() {
     _uc_log "legacy fallback font=$_ucl_font reason=$_ucl_reason"
     _uc_write_state fallback "$_ucl_font" legacy "$_ucl_reason"
     _uc_progress 25 "通用引擎未接管，正在使用兼容切换路径"
+
+    # A queued Universal request updates active_font.conf to the user's configured
+    # choice before reboot. If this new request falls back to legacy, restore the
+    # queued request's previousFont first so the legacy switcher records the real
+    # current-boot font as its rollback source.
+    if [ -s "$CONFIG_DIR/universal-font-next.conf" ]; then
+        _ucl_live_font=$(_uc_value "$CONFIG_DIR/universal-font-next.conf" previousFont)
+        if [ -n "$_ucl_live_font" ]; then
+            printf '%s\n' "$_ucl_live_font" > "$CONFIG_DIR/active_font.conf.tmp.$$" 2>/dev/null && \
+                mv -f "$CONFIG_DIR/active_font.conf.tmp.$$" "$CONFIG_DIR/active_font.conf" 2>/dev/null || true
+            chmod 0644 "$CONFIG_DIR/active_font.conf" 2>/dev/null || true
+        fi
+    fi
+
     _uc_cleanup_universal_next
     [ -f "$LEGACY_SWITCH" ] || {
         printf '{"status":"error","message":"缺少兼容字体切换核心"}\n'

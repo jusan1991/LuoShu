@@ -134,8 +134,7 @@ grep -q '^LegacyFont$' "$MOD3/config/active_font.conf"
 grep -q '^enabled=true$' "$MOD3/config/font_runtime_legacy_v14_4.conf"
 grep -q '^font=LegacyFont$' "$MOD3/config/font_runtime_legacy_v14_4.conf"
 [ ! -f "$MOD3/config/universal-font-runtime.conf" ]
-grep -q '^targetMode=legacy
- "$MOD3/config/font-payload-activated.conf"
+grep -q '^targetMode=legacy$' "$MOD3/config/font-payload-activated.conf"
 
 # A Universal payload rejected before swap keeps the previous live payload and
 # restores the configured selection to the font that is actually still running.
@@ -169,11 +168,8 @@ unset FAKE_VALIDATE
 [ ! -e "$MOD4/.luoshu-payload-next" ]
 [ ! -f "$MOD4/config/universal-font-next.conf" ]
 [ ! -f "$MOD4/config/text_reboot_required.conf" ]
-grep -q '^OldLive
- "$MOD4/config/active_font.conf"
-grep -q '^reason=payload-validation-failed
- "$MOD4/config/universal-font-next.failed.conf"
-grep -q '^font=OldLive
- "$MOD4/config/font_runtime_legacy_v14_4.conf"
+grep -q '^OldLive$' "$MOD4/config/active_font.conf"
+grep -q '^reason=payload-validation-failed$' "$MOD4/config/universal-font-next.failed.conf"
+grep -q '^font=OldLive$' "$MOD4/config/font_runtime_legacy_v14_4.conf"
 
 echo "universal_cutover_next_boot_test: PASS"

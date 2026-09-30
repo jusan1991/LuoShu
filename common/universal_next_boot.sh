@@ -49,14 +49,24 @@ _ufnb_restore_file() {
     [ -f "$_ufnb_backup" ] && cp -fp "$_ufnb_backup" "$_ufnb_target" 2>/dev/null || true
 }
 
+_ufnb_restore_previous_selection() {
+    _ufnb_cfg="$1"; _ufnb_previous="$2"
+    [ -n "$_ufnb_previous" ] || _ufnb_previous=default
+    printf '%s\n' "$_ufnb_previous" > "$_ufnb_cfg/active_font.conf" 2>/dev/null || true
+    chmod 0644 "$_ufnb_cfg/active_font.conf" 2>/dev/null || true
+    rm -f "$_ufnb_cfg/text_reboot_required.conf" 2>/dev/null || true
+}
+
 _ufnb_discard_invalid_next() {
-    _ufnb_state="$1"; _ufnb_next="$2"; _ufnb_reason="$3"
+    _ufnb_state="$1"; _ufnb_next="$2"; _ufnb_reason="$3"; _ufnb_previous="$4"
     _ufnb_failed="${_ufnb_state%.conf}.failed.conf"
     {
         printf 'state=failed\n'
         printf 'reason=%s\n' "$_ufnb_reason"
+        printf 'previousFont=%s\n' "${_ufnb_previous:-default}"
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
-    } > "$_ufnb_failed.tmp.$$" 2>/dev/null && mv -f "$_ufnb_failed.tmp.$$" "$_ufnb_failed" 2>/dev/null || true
+    } > "$_ufnb_failed.tmp.$" 2>/dev/null && mv -f "$_ufnb_failed.tmp.$" "$_ufnb_failed" 2>/dev/null || true
+    _ufnb_restore_previous_selection "${_ufnb_state%/universal-font-next.conf}" "$_ufnb_previous"
     rm -f "$_ufnb_state" 2>/dev/null || true
     rm -rf "$_ufnb_next" 2>/dev/null || true
 }
@@ -99,23 +109,27 @@ universal_font_next_boot_activate() {
     _ufnb_manifest="$_ufnb_next/.luoshu-runtime/deployment/deployment.json"
     [ -n "$_ufnb_font" ] && [ -n "$_ufnb_id" ] && [ -n "$_ufnb_digest" ] && [ -s "$_ufnb_manifest" ] || {
         _ufnb_log "staged universal state incomplete"
-        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" incomplete-state
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" incomplete-state "$_ufnb_previous_font"
         return 1
     }
 
     _ufnb_deployer="$_ufnb_mod/common/universal_font_deployment.py"
-    [ -f "$_ufnb_deployer" ] || return 1
+    [ -f "$_ufnb_deployer" ] || {
+        _ufnb_log "universal deployer missing; keeping previous payload"
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" deployer-missing "$_ufnb_previous_font"
+        return 1
+    }
     _ufnb_python "$_ufnb_deployer" --payload-root "$_ufnb_next" --validate-payload-only "$_ufnb_manifest" >/dev/null 2>&1 || {
         _ufnb_log "staged payload validation failed"
-        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" payload-validation-failed
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" payload-validation-failed "$_ufnb_previous_font"
         return 1
     }
     [ "$(_ufnb_manifest_value "$_ufnb_manifest" deploymentId)" = "$_ufnb_id" ] || {
-        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" deployment-id-mismatch
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" deployment-id-mismatch "$_ufnb_previous_font"
         return 1
     }
     [ "$(_ufnb_manifest_value "$_ufnb_manifest" payloadDigest)" = "$_ufnb_digest" ] || {
-        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" payload-digest-mismatch
+        _ufnb_discard_invalid_next "$_ufnb_state" "$_ufnb_next" payload-digest-mismatch "$_ufnb_previous_font"
         return 1
     }
 
@@ -131,10 +145,15 @@ universal_font_next_boot_activate() {
     rm -rf "$_ufnb_retired" 2>/dev/null || true
 
     if [ -d "$_ufnb_live" ]; then
-        mv "$_ufnb_live" "$_ufnb_retired" 2>/dev/null || { rm -rf "$_ufnb_backup"; return 1; }
+        mv "$_ufnb_live" "$_ufnb_retired" 2>/dev/null || {
+            _ufnb_restore_previous_selection "$_ufnb_cfg" "$_ufnb_previous_font"
+            rm -rf "$_ufnb_backup"
+            return 1
+        }
     fi
     if ! mv "$_ufnb_next" "$_ufnb_live" 2>/dev/null; then
         [ ! -d "$_ufnb_retired" ] || mv "$_ufnb_retired" "$_ufnb_live" 2>/dev/null || true
+        _ufnb_restore_previous_selection "$_ufnb_cfg" "$_ufnb_previous_font"
         rm -rf "$_ufnb_backup" 2>/dev/null || true
         return 1
     fi
@@ -154,7 +173,7 @@ universal_font_next_boot_activate() {
         [ ! -d "$_ufnb_retired" ] || mv "$_ufnb_retired" "$_ufnb_live" 2>/dev/null || true
         _ufnb_restore_file "$_ufnb_backup/runtime.conf" "$_ufnb_cfg/universal-font-runtime.conf"
         _ufnb_restore_file "$_ufnb_backup/legacy.conf" "$_ufnb_cfg/font_runtime_legacy_v14_4.conf"
-        _ufnb_restore_file "$_ufnb_backup/active.conf" "$_ufnb_cfg/active_font.conf"
+        _ufnb_restore_previous_selection "$_ufnb_cfg" "$_ufnb_previous_font"
         rm -rf "$_ufnb_backup" 2>/dev/null || true
         return 1
     }

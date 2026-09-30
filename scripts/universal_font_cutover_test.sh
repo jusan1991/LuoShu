@@ -152,6 +152,33 @@ grep -q '^targetMode=legacy$' "$MOD/config/font-payload-next.conf"
 grep -q '^state=staged$' "$MOD/config/universal-font-rollback.conf"
 grep -q '^reason=universal-runtime-verification-failed-rollback$' "$MOD/config/text_reboot_required.conf"
 
+# Previous system-default mode has no retired LuoShu payload; recovery must
+# still stage a clean default next boot instead of failing on a missing directory.
+rm -rf "$MOD/.luoshu-payload-next"
+rm -f "$MOD/config/font-payload-next.conf" "$MOD/config/universal-font-next.conf" "$MOD/config/universal-font-rollback.conf"
+cat > "$MOD/config/universal-font-runtime-verification.conf" <<'EOF'
+grade=FAIL
+bootId=boot-default
+EOF
+cat > "$MOD/config/universal-font-activated.conf" <<EOF
+font=BadFromDefault
+previousFont=default
+previousMode=default
+previousLegacy=false
+recovery=false
+retired=$MOD/.luoshu-retired/universal-boot-default
+bootId=boot-default
+EOF
+MODDIR="$MOD" MODULE_DIR="$MOD" LUOSHU_PYTHON="$TMP/fake-python" \
+  sh "$ROOT/common/universal_font_cutover.sh" rollback-from-fail boot-default >/dev/null
+[ -d "$MOD/.luoshu-payload-next" ]
+grep -q '^font=default$' "$MOD/config/font-payload-next.conf"
+grep -q '^targetMode=default$' "$MOD/config/font-payload-next.conf"
+grep -q '^recovery=true$' "$MOD/config/font-payload-next.conf"
+grep -q '^targetFont=default$' "$MOD/config/universal-font-rollback.conf"
+[ ! -f "$MOD/config/universal-font-next.conf" ]
+
+
 rm -rf "$MOD/.luoshu-payload-next"
 rm -f "$MOD/config/font-payload-next.conf" "$MOD/config/universal-font-next.conf"
 mkdir -p "$MOD/.luoshu-retired/universal-boot-universal/.luoshu-runtime/deployment"

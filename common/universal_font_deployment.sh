@@ -137,7 +137,12 @@ _ud_capture_previous() {
         _udp_saved_font=$(_ud_value "$_udp_pending_legacy" previousFont)
         _udp_saved_legacy=$(_ud_value "$_udp_pending_legacy" previousLegacy)
         [ -n "$_udp_saved_font" ] && UD_PREVIOUS_FONT="$_udp_saved_font"
-        if [ "$_udp_saved_legacy" = true ]; then
+        # A queued legacy request does not change the current boot. If Universal
+        # runtime is still active, the payload we may need to recover is Universal.
+        if [ -s "$CONFIG_DIR/universal-font-runtime.conf" ]; then
+            UD_PREVIOUS_MODE=universal
+            UD_PREVIOUS_LEGACY=false
+        elif [ "$_udp_saved_legacy" = true ]; then
             UD_PREVIOUS_MODE=legacy
             UD_PREVIOUS_LEGACY=true
         elif [ "$UD_PREVIOUS_FONT" = default ]; then

@@ -8,7 +8,10 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 cat > "$TMP/fake-python" <<'SH'
 #!/bin/sh
 case "$1" in
-  */universal_font_deployment.py) exit 0 ;;
+  */universal_font_deployment.py)
+    [ "${FAKE_VALIDATE:-ok}" = ok ] || exit 1
+    exit 0
+    ;;
   -)
     case "$3" in
       deploymentId) printf 'new-deployment\n' ;;
@@ -131,6 +134,46 @@ grep -q '^LegacyFont$' "$MOD3/config/active_font.conf"
 grep -q '^enabled=true$' "$MOD3/config/font_runtime_legacy_v14_4.conf"
 grep -q '^font=LegacyFont$' "$MOD3/config/font_runtime_legacy_v14_4.conf"
 [ ! -f "$MOD3/config/universal-font-runtime.conf" ]
-grep -q '^targetMode=legacy$' "$MOD3/config/font-payload-activated.conf"
+grep -q '^targetMode=legacy
+ "$MOD3/config/font-payload-activated.conf"
+
+# A Universal payload rejected before swap keeps the previous live payload and
+# restores the configured selection to the font that is actually still running.
+MOD4="$TMP/rejected"
+mkdir -p "$MOD4/common" "$MOD4/config" "$MOD4/.luoshu-payload/old" \
+         "$MOD4/.luoshu-payload-next/.luoshu-runtime/deployment"
+printf '# fake\n' > "$MOD4/common/universal_font_deployment.py"
+printf 'still-live\n' > "$MOD4/.luoshu-payload/old/file"
+printf '{}\n' > "$MOD4/.luoshu-payload-next/.luoshu-runtime/deployment/deployment.json"
+printf 'NewConfigured\n' > "$MOD4/config/active_font.conf"
+printf 'enabled=true\nfont=OldLive\n' > "$MOD4/config/font_runtime_legacy_v14_4.conf"
+printf 'pending\n' > "$MOD4/config/text_reboot_required.conf"
+cat > "$MOD4/config/universal-font-next.conf" <<'EOF'
+state=prepared
+font=NewConfigured
+deploymentId=new-deployment
+payloadDigest=new-digest
+previousFont=OldLive
+previousMode=legacy
+previousLegacy=true
+recovery=false
+EOF
+
+MODDIR="$MOD4"; MODULE_DIR="$MOD4"; LUOSHU_PYTHON="$TMP/fake-python"; FAKE_VALIDATE=fail
+export MODDIR MODULE_DIR LUOSHU_PYTHON FAKE_VALIDATE
+. "$ROOT/common/universal_next_boot.sh"
+universal_font_next_boot_activate >/dev/null 2>&1 || true
+unset FAKE_VALIDATE
+
+[ -f "$MOD4/.luoshu-payload/old/file" ]
+[ ! -e "$MOD4/.luoshu-payload-next" ]
+[ ! -f "$MOD4/config/universal-font-next.conf" ]
+[ ! -f "$MOD4/config/text_reboot_required.conf" ]
+grep -q '^OldLive
+ "$MOD4/config/active_font.conf"
+grep -q '^reason=payload-validation-failed
+ "$MOD4/config/universal-font-next.failed.conf"
+grep -q '^font=OldLive
+ "$MOD4/config/font_runtime_legacy_v14_4.conf"
 
 echo "universal_cutover_next_boot_test: PASS"

@@ -59,6 +59,33 @@ class HomeContractTest {
     }
 
     @Test
+    fun rollbackPendingShowsRecoveryTargetWithoutPretendingRollbackAlreadyHappened() {
+        val state = ModuleSnapshot(
+            loading = false,
+            installed = true,
+            rootGranted = true,
+            activeFont = "BadUniversal",
+            effectiveFont = "unknown",
+            fontEffectState = "rollback-pending",
+            verificationGrade = "FAIL",
+            verificationReason = "coverage-digits-missing",
+            mountState = "mounted",
+            rollbackState = "staged",
+            rollbackPending = true,
+            rollbackTargetFont = "OldFont",
+            rollbackTargetMode = "legacy",
+            rebootRequired = true,
+        ).toHomeUiState()
+
+        assertEquals("BadUniversal（验证失败，待重启恢复 OldFont）", state.currentFont)
+        assertEquals("正在等待安全回退", state.taskTitle)
+        assertTrue(state.taskMessage.contains("OldFont"))
+        assertTrue(state.taskMessage.contains("完整重启"))
+        assertFalse(state.mountHealthy)
+        assertTrue(state.rebootRequired)
+    }
+
+    @Test
     fun dynamicConfigFailureProvidesAnActionableReason() {
         val state = ModuleSnapshot(
             loading = false,

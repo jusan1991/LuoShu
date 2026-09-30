@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # LuoShu Phase 7 backend-neutral deployment bridge.
-# Prepares private payloads. The normal font-switch path does not call stage-next yet.
+# Phase 9 may stage an already validated prepared payload for the official next boot.
 set +e
 
 MODDIR="${MODDIR:-${MODULE_DIR:-/data/adb/modules/LuoShu}}"
@@ -24,6 +24,10 @@ _ud_exec() {
     PYTHONPATH="$MODDIR/common:$PYROOT/lib/python3.14:$PYROOT/lib/python3.14/site-packages" \
     LD_LIBRARY_PATH="$PYROOT/lib:$PYROOT/lib/python3.14/lib-dynload${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         "$PYBIN" "$@"
+}
+
+_ud_value() {
+    sed -n "s/^${2}=//p" "$1" 2>/dev/null | head -n1 | tr -d '\r\n'
 }
 
 _ud_family_key() {
@@ -102,29 +106,77 @@ _ud_validate() {
         --validate "$_udv_manifest"
 }
 
-_ud_stage_next() {
-    _uds_family="$1"
-    _ud_prepare "$_uds_family" >/dev/null || return $?
-    _uds_manifest=$(_ud_manifest "$_uds_family") || return 1
-    _uds_payload=$(_ud_payload "$_uds_family") || return 1
-    _ud_validate "$_uds_family" >/dev/null || return 1
-
-    _uds_id=$(sed -n 's/.*"deploymentId":[[:space:]]*"\([^"]*\)".*/\1/p' "$_uds_manifest" 2>/dev/null | head -n1)
-    _uds_digest=$(sed -n 's/.*"payloadDigest":[[:space:]]*"\([^"]*\)".*/\1/p' "$_uds_manifest" 2>/dev/null | head -n1)
-    [ -n "$_uds_id" ] && [ -n "$_uds_digest" ] || {
-        # Pretty JSON normally places values on dedicated lines; Python is the
-        # authoritative parser when sed cannot read them.
-        _uds_values=$(_ud_exec - "$_uds_manifest" <<'PY'
+_ud_manifest_identity() {
+    _udi_manifest="$1"
+    _ud_exec - "$_udi_manifest" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1],encoding='utf-8'))
 print(p.get('deploymentId',''))
 print(p.get('payloadDigest',''))
 PY
-)
-        _uds_id=$(printf '%s\n' "$_uds_values" | sed -n '1p')
-        _uds_digest=$(printf '%s\n' "$_uds_values" | sed -n '2p')
-    }
+}
+
+_ud_capture_previous() {
+    UD_PREVIOUS_FONT=$(head -n1 "$CONFIG_DIR/active_font.conf" 2>/dev/null | tr -d '\r\n')
+    [ -n "$UD_PREVIOUS_FONT" ] || UD_PREVIOUS_FONT=default
+    UD_PREVIOUS_MODE=''
+    UD_PREVIOUS_LEGACY=false
+
+    # Replacing an already queued request must keep the identity of the payload
+    # actually used by this Android boot, not the selection that was merely queued.
+    _udp_pending_universal="$CONFIG_DIR/universal-font-next.conf"
+    _udp_pending_legacy="$CONFIG_DIR/font-payload-next.conf"
+    if [ -s "$_udp_pending_universal" ]; then
+        _udp_saved_font=$(_ud_value "$_udp_pending_universal" previousFont)
+        _udp_saved_mode=$(_ud_value "$_udp_pending_universal" previousMode)
+        _udp_saved_legacy=$(_ud_value "$_udp_pending_universal" previousLegacy)
+        [ -n "$_udp_saved_font" ] && UD_PREVIOUS_FONT="$_udp_saved_font"
+        [ -n "$_udp_saved_mode" ] && UD_PREVIOUS_MODE="$_udp_saved_mode"
+        [ "$_udp_saved_legacy" = true ] && UD_PREVIOUS_LEGACY=true
+    elif [ -s "$_udp_pending_legacy" ]; then
+        _udp_saved_font=$(_ud_value "$_udp_pending_legacy" previousFont)
+        _udp_saved_legacy=$(_ud_value "$_udp_pending_legacy" previousLegacy)
+        [ -n "$_udp_saved_font" ] && UD_PREVIOUS_FONT="$_udp_saved_font"
+        if [ "$_udp_saved_legacy" = true ]; then
+            UD_PREVIOUS_MODE=legacy
+            UD_PREVIOUS_LEGACY=true
+        elif [ "$UD_PREVIOUS_FONT" = default ]; then
+            UD_PREVIOUS_MODE=default
+        else
+            UD_PREVIOUS_MODE=classic
+        fi
+    fi
+
+    if [ -z "$UD_PREVIOUS_MODE" ]; then
+        if [ -s "$CONFIG_DIR/universal-font-runtime.conf" ]; then
+            UD_PREVIOUS_MODE=universal
+        elif [ -s "$CONFIG_DIR/font_runtime_legacy_v14_4.conf" ]; then
+            UD_PREVIOUS_MODE=legacy
+            UD_PREVIOUS_LEGACY=true
+        elif [ "$UD_PREVIOUS_FONT" = default ]; then
+            UD_PREVIOUS_MODE=default
+        else
+            UD_PREVIOUS_MODE=classic
+        fi
+    fi
+
+    UD_PREVIOUS_DEPLOYMENT_ID=$(_ud_value "$CONFIG_DIR/universal-font-runtime.conf" deploymentId)
+    UD_PREVIOUS_PAYLOAD_DIGEST=$(_ud_value "$CONFIG_DIR/universal-font-runtime.conf" payloadDigest)
+}
+
+_ud_stage_prepared() {
+    _uds_family="$1"
+    [ -n "$_uds_family" ] || return 1
+    _uds_manifest=$(_ud_manifest "$_uds_family") || return 1
+    _uds_payload=$(_ud_payload "$_uds_family") || return 1
+    _ud_validate "$_uds_family" >/dev/null 2>&1 || return 1
+
+    _uds_values=$(_ud_manifest_identity "$_uds_manifest") || return 1
+    _uds_id=$(printf '%s\n' "$_uds_values" | sed -n '1p')
+    _uds_digest=$(printf '%s\n' "$_uds_values" | sed -n '2p')
     [ -n "$_uds_id" ] && [ -n "$_uds_digest" ] || return 1
+
+    _ud_capture_previous
 
     _uds_next="$MODDIR/.luoshu-payload-next"
     _uds_stage="$MODDIR/.luoshu-payload-next.stage.$$"
@@ -134,20 +186,49 @@ PY
         rm -rf "$_uds_stage" 2>/dev/null || true
         return 1
     }
+
+    # Universal and legacy next-boot markers are mutually exclusive.
+    rm -f "$CONFIG_DIR/font-payload-next.conf" 2>/dev/null || true
     rm -rf "$_uds_next" 2>/dev/null || true
     mv "$_uds_stage" "$_uds_next" 2>/dev/null || {
         rm -rf "$_uds_stage" 2>/dev/null || true
         return 1
     }
+
     _uds_state="$CONFIG_DIR/universal-font-next.conf"
     {
+        printf 'state=prepared\n'
         printf 'font=%s\n' "$_uds_family"
         printf 'deploymentId=%s\n' "$_uds_id"
         printf 'payloadDigest=%s\n' "$_uds_digest"
+        printf 'previousFont=%s\n' "$UD_PREVIOUS_FONT"
+        printf 'previousMode=%s\n' "$UD_PREVIOUS_MODE"
+        printf 'previousLegacy=%s\n' "$UD_PREVIOUS_LEGACY"
+        printf 'previousDeploymentId=%s\n' "$UD_PREVIOUS_DEPLOYMENT_ID"
+        printf 'previousPayloadDigest=%s\n' "$UD_PREVIOUS_PAYLOAD_DIGEST"
+        printf 'recovery=false\n'
         printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
     } > "$_uds_state.tmp.$$" 2>/dev/null && mv -f "$_uds_state.tmp.$$" "$_uds_state" 2>/dev/null || return 1
     chmod 0600 "$_uds_state" 2>/dev/null || true
-    printf '{"status":"ok","state":"staged-next-boot","deploymentId":"%s"}\n' "$_uds_id"
+
+    _uds_reboot="$CONFIG_DIR/text_reboot_required.conf"
+    {
+        printf 'font=%s\n' "$_uds_family"
+        printf 'reason=universal-next-boot-prepared\n'
+        printf 'pipeline=universal-font-deployment-v1\n'
+        printf 'deploymentId=%s\n' "$_uds_id"
+        printf 'time=%s\n' "$(date +%s 2>/dev/null || echo 0)"
+    } > "$_uds_reboot.tmp.$$" 2>/dev/null && mv -f "$_uds_reboot.tmp.$$" "$_uds_reboot" 2>/dev/null || true
+    chmod 0644 "$_uds_reboot" 2>/dev/null || true
+
+    printf '{"status":"ok","state":"staged-next-boot","pipeline":"universal","fallback":false,"deploymentId":"%s","previousMode":"%s"}\n' \
+        "$_uds_id" "$UD_PREVIOUS_MODE"
+}
+
+_ud_stage_next() {
+    _uds_family="$1"
+    _ud_prepare "$_uds_family" >/dev/null || return $?
+    _ud_stage_prepared "$_uds_family"
 }
 
 case "${1:-prepare}" in
@@ -155,9 +236,10 @@ case "${1:-prepare}" in
     validate) _ud_validate "${2:-}" ;;
     manifest|path) _ud_manifest "${2:-}" ;;
     payload) _ud_payload "${2:-}" ;;
+    stage-prepared) _ud_stage_prepared "${2:-}" ;;
     stage-next) _ud_stage_next "${2:-}" ;;
     *)
-        echo "Usage: $0 {prepare|validate|manifest|payload|stage-next} <font-family>" >&2
+        echo "Usage: $0 {prepare|validate|manifest|payload|stage-prepared|stage-next} <font-family>" >&2
         exit 2
         ;;
 esac

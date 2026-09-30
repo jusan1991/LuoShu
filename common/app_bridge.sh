@@ -155,6 +155,19 @@ status_json() {
     [ -n "$_verification_grade" ] || _verification_grade='PENDING'
     [ -n "$_mount_state" ] || _mount_state='unknown'
 
+    _cutover_file="$MODDIR/config/universal-font-cutover.conf"
+    _rollback_file="$MODDIR/config/universal-font-rollback.conf"
+    _cutover_state="$(read_prop "$_cutover_file" state)"
+    _cutover_decision="$(read_prop "$_cutover_file" decision)"
+    _rollback_state="$(read_prop "$_rollback_file" state)"
+    _rollback_target_font="$(read_prop "$_rollback_file" targetFont)"
+    _rollback_target_mode="$(read_prop "$_rollback_file" targetMode)"
+    _rollback_pending=false
+    [ "$_rollback_state" = staged ] && _rollback_pending=true
+    [ -n "$_cutover_state" ] || _cutover_state=idle
+    [ -n "$_cutover_decision" ] || _cutover_decision=none
+    [ -n "$_rollback_state" ] || _rollback_state=none
+
     _selected="$(select_task_file)"
     _task_type="${_selected%%|*}"
     _task_file="${_selected#*|}"
@@ -183,7 +196,10 @@ status_json() {
 
     _effective_active='unknown'
     _font_effect_state='pending'
-    if [ "$_active" = default ]; then
+    if [ "$_rollback_pending" = true ]; then
+        _effective_active=unknown
+        _font_effect_state=rollback-pending
+    elif [ "$_active" = default ]; then
         _effective_active=default
         _font_effect_state=system
     elif [ "$_reboot_required" = true ]; then
@@ -212,11 +228,13 @@ status_json() {
         _font_effect_state=unverified
     fi
 
-    printf '{"status":"ok","data":{"root":true,"installed":%s,"version":"%s","versionCode":%s,"active":"%s","effectiveActive":"%s","fontEffectState":"%s","verificationState":"%s","verificationGrade":"%s","verificationMode":"%s","verificationReason":"%s","mountState":"%s","mountFailure":"%s","taskType":"%s","taskId":"%s","taskState":"%s","taskMessage":"%s","taskProgress":%s,"rebootRequired":%s,"rootManager":"%s","mountEngine":"%s","moduleDir":"%s"}}\n' \
+    printf '{"status":"ok","data":{"root":true,"installed":%s,"version":"%s","versionCode":%s,"active":"%s","effectiveActive":"%s","fontEffectState":"%s","verificationState":"%s","verificationGrade":"%s","verificationMode":"%s","verificationReason":"%s","mountState":"%s","mountFailure":"%s","cutoverState":"%s","cutoverDecision":"%s","rollbackState":"%s","rollbackPending":%s,"rollbackTargetFont":"%s","rollbackTargetMode":"%s","taskType":"%s","taskId":"%s","taskState":"%s","taskMessage":"%s","taskProgress":%s,"rebootRequired":%s,"rootManager":"%s","mountEngine":"%s","moduleDir":"%s"}}\n' \
         "$_installed" "$(json_escape "$_version")" "${_version_code:-0}" "$(json_escape "$_active")" \
         "$(json_escape "$_effective_active")" "$(json_escape "$_font_effect_state")" \
         "$(json_escape "$_verification_state")" "$(json_escape "$_verification_grade")" "$(json_escape "$_verification_mode")" \
         "$(json_escape "$_verification_reason")" "$(json_escape "$_mount_state")" "$(json_escape "$_mount_failed")" \
+        "$(json_escape "$_cutover_state")" "$(json_escape "$_cutover_decision")" "$(json_escape "$_rollback_state")" "$_rollback_pending" \
+        "$(json_escape "$_rollback_target_font")" "$(json_escape "$_rollback_target_mode")" \
         "$(json_escape "$_task_type")" "$(json_escape "$_task_id")" "$(json_escape "$_task_state")" \
         "$(json_escape "$_task_message")" "$_task_progress" "$_reboot_required" \
         "$(json_escape "$(root_manager)")" "$(json_escape "$(mount_engine)")" "$(json_escape "$MODDIR")"

@@ -69,7 +69,7 @@
 - 未知 OEM 分区可以进入拓扑
 
 ### Phase 2 — Role Classifier + Shadow Replacement Plan
-状态：**进行中**
+状态：**已完成 / PR #255 / device-font-roles-v1 + device-font-shadow-plan-v1**
 
 目标：
 
@@ -109,7 +109,7 @@ Shadow 动作：
 - 第二阶段不允许实际写入字体或 XML
 
 ### Phase 3 — Imported Font Analyzer / Compiler Input
-状态：**进行中 / source-font-profile-v1**
+状态：**已完成 / PR #256 / source-font-profile-v1**
 
 目标：
 

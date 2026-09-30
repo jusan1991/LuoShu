@@ -14,6 +14,9 @@ on:
       - common/font_manager.sh
       - common/font_switch_task.sh
       - common/app_bridge.sh
+      - android-app/app/src/main/java/io/github/xgl34222220/luoshu/LuoShuViewModel.kt
+      - android-app/app/src/main/java/io/github/xgl34222220/luoshu/ui/home/HomeContract.kt
+      - android-app/app/src/test/java/io/github/xgl34222220/luoshu/ui/home/HomeContractTest.kt
       - scripts/universal_font_cutover_gate_test.py
       - scripts/universal_font_cutover_test.sh
       - scripts/universal_cutover_next_boot_test.sh
@@ -37,6 +40,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
       - name: Install font dependencies
         run: |
           python3 -m pip install --disable-pip-version-check 'fonttools==4.63.0'
@@ -67,6 +80,10 @@ jobs:
           sh scripts/universal_font_cutover_test.sh
           sh scripts/universal_cutover_next_boot_test.sh
           sh scripts/app_bridge_status_test.sh
+
+          cd android-app
+          gradle --no-daemon --stacktrace :app:testDebugUnitTest
+          cd ..
 
           grep -qx 'common/universal_font_cutover_gate.py' scripts/module_payload_manifest.txt
           grep -qx 'common/universal_font_cutover.sh' scripts/module_payload_manifest.txt

@@ -71,6 +71,8 @@ internal data class ModuleSnapshot(
                 "${activeLabel}（验证失败，待重启恢复 ${rollbackTargetLabel}）"
             activeFont in setOf("", "default") || fontEffectState == "system" -> "系统默认字体"
             fontEffectState == "verified" && effectiveFont == activeFont -> activeLabel
+            fontEffectState == "failed" && verificationMode.startsWith("universal") ->
+                "${activeLabel}（运行验证失败）"
             fontEffectState == "failed" -> "系统默认字体（${activeLabel}未生效）"
             fontEffectState == "pending-reboot" -> "${activeLabel}（等待完整重启）"
             else -> "${activeLabel}（已准备，待本次启动验证）"
@@ -84,6 +86,8 @@ internal data class ModuleSnapshot(
         get() = when {
             rollbackPending || fontEffectState == "rollback-pending" ->
                 "通用字体运行验证失败，已准备安全回退到 ${rollbackTargetLabel}；完整重启后恢复"
+            fontEffectState == "failed" && verificationMode.startsWith("universal") ->
+                "通用字体运行验证失败，当前启动的实际字体效果无法安全确认；请查看运行日志并重新选择字体或恢复系统字体"
             mountFailure.isNotBlank() -> "自挂载失败（${mountFailure}），已安全回滚到系统字体"
             else -> when (verificationReason) {
                 "self-mount-not-visible" -> "开机挂载未完整生效，系统已安全使用默认字体"
